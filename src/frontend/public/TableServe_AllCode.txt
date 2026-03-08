@@ -1,0 +1,4118 @@
+================================================================================
+  TABLESERVE - SMART RESTAURANT ORDERING SYSTEM
+  Complete Source Code - All Files
+================================================================================
+
+TABLE OF CONTENTS
+-----------------
+ 1.  src/backend/main.mo
+ 2.  src/frontend/index.html
+ 3.  src/frontend/index.css
+ 4.  src/frontend/tailwind.config.js
+ 5.  src/frontend/vite.config.js
+ 6.  src/frontend/tsconfig.json
+ 7.  src/frontend/src/main.tsx
+ 8.  src/frontend/src/App.tsx
+ 9.  src/frontend/src/routes/routeTree.tsx
+10.  src/frontend/src/hooks/useInternetIdentity.ts
+11.  src/frontend/src/hooks/useActor.ts
+12.  src/frontend/src/hooks/useQueries.ts
+13.  src/frontend/src/lib/utils.ts
+14.  src/frontend/src/utils/urlParams.ts
+15.  src/frontend/src/components/shared/Layout.tsx
+16.  src/frontend/src/pages/CustomerView.tsx
+17.  src/frontend/src/components/restaurant/TableSelector.tsx
+18.  src/frontend/src/components/restaurant/MenuView.tsx
+19.  src/frontend/src/components/restaurant/OrderStatusView.tsx
+20.  src/frontend/src/components/restaurant/BillView.tsx
+21.  src/frontend/src/pages/KitchenDashboard.tsx
+22.  src/frontend/src/pages/AdminPanel.tsx
+
+================================================================================
+
+================================================================================
+FILE: src/backend/main.mo
+================================================================================
+import Int "mo:core/Int";
+import List "mo:core/List";
+import Map "mo:core/Map";
+import Nat "mo:core/Nat";
+import Text "mo:core/Text";
+import Time "mo:core/Time";
+import Array "mo:core/Array";
+import Float "mo:core/Float";
+import Runtime "mo:core/Runtime";
+import Iter "mo:core/Iter";
+import Order "mo:core/Order";
+import MixinAuthorization "authorization/MixinAuthorization";
+import AccessControl "authorization/access-control";
+
+actor {
+  // Authorization
+  let accessControlState = AccessControl.initState();
+  include MixinAuthorization(accessControlState);
+
+  // Types
+  type MenuItem = {
+    id : Nat;
+    name : Text;
+    description : Text;
+    price : Float;
+    category : Text;
+    imageUrl : Text;
+    available : Bool;
+  };
+
+  type OrderItem = {
+    menuItemId : Nat;
+    name : Text;
+    price : Float;
+    quantity : Nat;
+  };
+
+  type OrderStatus = {
+    #pending;
+    #confirmed;
+    #ready;
+  };
+
+  type Order = {
+    id : Nat;
+    tableNumber : Nat;
+    items : [OrderItem];
+    status : OrderStatus;
+    placedAt : Int;
+    estimatedMinutes : ?Nat;
+  };
+
+  // State
+  var nextMenuItemId = 1;
+  var nextOrderId = 1;
+
+  let menuItems = Map.empty<Nat, MenuItem>();
+  let orders = Map.empty<Nat, Order>();
+
+  // Helpers
+  module MenuItem {
+    public func compare(item1 : MenuItem, item2 : MenuItem) : Order.Order {
+      Text.compare(item1.name, item2.name);
+    };
+  };
+
+  func getTimestamp() : Int {
+    Time.now();
+  };
+
+  func seedMenu() {
+    if (menuItems.size() == 0) {
+      let defaultItems = [
+        {
+          name = "Chicken Wings";
+          description = "5 pieces hot buffalo wings";
+          price = 8.99;
+          category = "Appetizer";
+          imageUrl = "https://example.com/chicken-wings.jpg";
+          available = true;
+        },
+        {
+          name = "Spaghetti Carbonara";
+          description = "Classic Italian pasta with bacon and cream sauce";
+          price = 14.50;
+          category = "Main";
+          imageUrl = "https://example.com/carbonara.jpg";
+          available = true;
+        },
+        {
+          name = "Lemonade";
+          description = "Freshly squeezed lemon juice";
+          price = 3.25;
+          category = "Drink";
+          imageUrl = "https://example.com/lemonade.jpg";
+          available = true;
+        },
+        {
+          name = "Chocolate Cake";
+          description = "Rich chocolate cake with fudge icing";
+          price = 6.00;
+          category = "Dessert";
+          imageUrl = "https://example.com/chocolate-cake.jpg";
+          available = true;
+        },
+      ];
+
+      for (item in defaultItems.values()) {
+        let menuItem : MenuItem = {
+          id = nextMenuItemId;
+          name = item.name;
+          description = item.description;
+          price = item.price;
+          category = item.category;
+          imageUrl = item.imageUrl;
+          available = item.available;
+        };
+        menuItems.add(nextMenuItemId, menuItem);
+        nextMenuItemId += 1;
+      };
+    };
+  };
+
+  // Menu Management
+  public shared ({ caller }) func createMenuItem(name : Text, description : Text, price : Float, category : Text, imageUrl : Text) : async Nat {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
+      Runtime.trap("Unauthorized: Only admins can create menu items");
+    };
+    let menuItem : MenuItem = {
+      id = nextMenuItemId;
+      name;
+      description;
+      price;
+      category;
+      imageUrl;
+      available = true;
+    };
+    menuItems.add(nextMenuItemId, menuItem);
+    nextMenuItemId += 1;
+    menuItem.id;
+  };
+
+  public shared ({ caller }) func updateMenuItem(id : Nat, name : Text, description : Text, price : Float, category : Text, imageUrl : Text) : async () {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
+      Runtime.trap("Unauthorized: Only admins can update menu items");
+    };
+    switch (menuItems.get(id)) {
+      case (null) { Runtime.trap("Menu item not found") };
+      case (?existingItem) {
+        let updatedItem : MenuItem = {
+          id;
+          name;
+          description;
+          price;
+          category;
+          imageUrl;
+          available = existingItem.available;
+        };
+        menuItems.add(id, updatedItem);
+      };
+    };
+  };
+
+  public shared ({ caller }) func toggleMenuItemAvailability(id : Nat) : async () {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
+      Runtime.trap("Unauthorized: Only admins can toggle availability");
+    };
+    switch (menuItems.get(id)) {
+      case (null) { Runtime.trap("Menu item not found") };
+      case (?item) {
+        let updatedItem = {
+          id = item.id;
+          name = item.name;
+          description = item.description;
+          price = item.price;
+          category = item.category;
+          imageUrl = item.imageUrl;
+          available = not item.available;
+        };
+        menuItems.add(id, updatedItem);
+      };
+    };
+  };
+
+  public shared ({ caller }) func deleteMenuItem(id : Nat) : async () {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
+      Runtime.trap("Unauthorized: Only admins can delete menu items");
+    };
+    if (not menuItems.containsKey(id)) {
+      Runtime.trap("Menu item not found");
+    };
+    menuItems.remove(id);
+  };
+
+  public query ({ caller }) func getMenu() : async [MenuItem] {
+    seedMenu();
+    menuItems.values().toArray().filter(func(item) { item.available }).sort();
+  };
+
+  public query ({ caller }) func getMenuByCategory(category : Text) : async [MenuItem] {
+    seedMenu();
+    menuItems.values().toArray().filter(func(item) { item.category == category and item.available }).sort();
+  };
+
+  // Order Management
+  public shared ({ caller }) func placeOrder(tableNumber : Nat, items : [OrderItem]) : async Nat {
+    if (tableNumber < 1 or tableNumber > 20) {
+      Runtime.trap("Invalid table number");
+    };
+    if (items.size() == 0) {
+      Runtime.trap("Order must have at least one item");
+    };
+    let order : Order = {
+      id = nextOrderId;
+      tableNumber;
+      items;
+      status = #pending;
+      placedAt = getTimestamp();
+      estimatedMinutes = null;
+    };
+    orders.add(nextOrderId, order);
+    nextOrderId += 1;
+    order.id;
+  };
+
+  public shared ({ caller }) func confirmOrder(id : Nat, estimatedMinutes : Nat) : async () {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
+      Runtime.trap("Unauthorized: Only admins can confirm orders");
+    };
+    switch (orders.get(id)) {
+      case (null) { Runtime.trap("Order not found") };
+      case (?order) {
+        if (order.status != #pending) {
+          Runtime.trap("Order is not pending");
+        };
+        let updatedOrder = {
+          id = order.id;
+          tableNumber = order.tableNumber;
+          items = order.items;
+          status = #confirmed;
+          placedAt = order.placedAt;
+          estimatedMinutes = ?estimatedMinutes;
+        };
+        orders.add(id, updatedOrder);
+      };
+    };
+  };
+
+  public shared ({ caller }) func markOrderReady(id : Nat) : async () {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
+      Runtime.trap("Unauthorized: Only admins can mark orders as ready");
+    };
+    switch (orders.get(id)) {
+      case (null) { Runtime.trap("Order not found") };
+      case (?order) {
+        if (order.status != #confirmed) {
+          Runtime.trap("Order is not confirmed");
+        };
+        let updatedOrder = {
+          id = order.id;
+          tableNumber = order.tableNumber;
+          items = order.items;
+          status = #ready;
+          placedAt = order.placedAt;
+          estimatedMinutes = order.estimatedMinutes;
+        };
+        orders.add(id, updatedOrder);
+      };
+    };
+  };
+
+  public query ({ caller }) func getOrderStatus(orderId : Nat) : async OrderStatus {
+    switch (orders.get(orderId)) {
+      case (null) { Runtime.trap("Order not found") };
+      case (?order) { order.status };
+    };
+  };
+
+  public query ({ caller }) func getTableOrders(tableNumber : Nat) : async [Order] {
+    orders.values().toArray().filter(func(order) { order.tableNumber == tableNumber });
+  };
+
+  public query ({ caller }) func getActiveKitchenOrders() : async [Order] {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
+      Runtime.trap("Unauthorized: Only admins can view kitchen orders");
+    };
+    orders.values().toArray().filter(func(order) { order.status != #ready });
+  };
+
+  public shared ({ caller }) func clearTableOrders(tableNumber : Nat) : async () {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
+      Runtime.trap("Unauthorized: Only admins can clear table orders");
+    };
+
+    let completedOrderIds = List.empty<Nat>();
+
+    for ((orderId, _) in orders.entries()) {
+      switch (orders.get(orderId)) {
+        case (null) {};
+        case (?order) {
+          if (order.tableNumber == tableNumber and order.status == #ready) {
+            completedOrderIds.add(orderId);
+          };
+        };
+      };
+    };
+
+    for (id in completedOrderIds.values()) {
+      orders.remove(id);
+    };
+  };
+
+  // Billing
+  public query ({ caller }) func getTableBill(tableNumber : Nat) : async Float {
+    var total : Float = 0;
+    for ((orderId, order) in orders.entries()) {
+      if (order.tableNumber == tableNumber) {
+        for (item in order.items.values()) {
+          total += (item.price * item.quantity.toFloat());
+        };
+      };
+    };
+    total;
+  };
+
+  public shared ({ caller }) func payBill(tableNumber : Nat) : async () {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #admin))) {
+      Runtime.trap("Unauthorized: Only admins can process payments");
+    };
+
+    let completedOrderIds = List.empty<Nat>();
+
+    for ((orderId, order) in orders.entries()) {
+      if (order.tableNumber == tableNumber) {
+        completedOrderIds.add(orderId);
+      };
+    };
+
+    for (id in completedOrderIds.values()) {
+      orders.remove(id);
+    };
+  };
+};
+
+
+================================================================================
+FILE: src/frontend/index.html
+================================================================================
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title></title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
+================================================================================
+FILE: src/frontend/index.css
+================================================================================
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Fraunces - Display font for restaurant feel */
+@font-face {
+  font-family: "Fraunces";
+  src: url("/assets/fonts/Fraunces.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Bricolage Grotesque - UI labels and nav */
+@font-face {
+  font-family: "Bricolage Grotesque";
+  src: url("/assets/fonts/BricolageGrotesque.woff2") format("woff2");
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* General Sans - Body text */
+@font-face {
+  font-family: "General Sans";
+  src: url("/assets/fonts/GeneralSans.woff2") format("woff2");
+  font-weight: 200 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@layer base {
+  :root {
+    --radius: 0.625rem;
+
+    /* Saffron & Ivory -- vibrant Indian-inspired palette */
+    --background: 0.98 0.01 88;
+    --foreground: 0.18 0.06 42;
+
+    --card: 1 0 0;
+    --card-foreground: 0.18 0.06 42;
+
+    --popover: 1 0 0;
+    --popover-foreground: 0.18 0.06 42;
+
+    /* Saffron primary -- rich golden orange */
+    --primary: 0.68 0.19 58;
+    --primary-foreground: 0.15 0.04 40;
+
+    /* Ivory secondary */
+    --secondary: 0.95 0.018 88;
+    --secondary-foreground: 0.28 0.06 42;
+
+    --muted: 0.93 0.014 85;
+    --muted-foreground: 0.5 0.04 50;
+
+    /* Turmeric accent -- warm deep gold */
+    --accent: 0.82 0.12 72;
+    --accent-foreground: 0.15 0.05 40;
+
+    /* Crimson destructive */
+    --destructive: 0.52 0.22 22;
+    --destructive-foreground: 0.99 0 0;
+
+    --border: 0.88 0.025 80;
+    --input: 0.92 0.018 85;
+    --ring: 0.68 0.19 58;
+
+    /* Status colors */
+    --status-pending: 0.83 0.16 80;
+    --status-pending-fg: 0.2 0.08 50;
+    --status-confirmed: 0.68 0.13 230;
+    --status-confirmed-fg: 0.99 0 0;
+    --status-ready: 0.62 0.15 148;
+    --status-ready-fg: 0.99 0 0;
+
+    /* Chart colors */
+    --chart-1: 0.68 0.19 58;
+    --chart-2: 0.75 0.16 72;
+    --chart-3: 0.62 0.15 148;
+    --chart-4: 0.52 0.22 22;
+    --chart-5: 0.58 0.18 290;
+
+    --sidebar: 0.95 0.016 85;
+    --sidebar-foreground: 0.18 0.06 42;
+    --sidebar-primary: 0.68 0.19 58;
+    --sidebar-primary-foreground: 0.15 0.04 40;
+    --sidebar-accent: 0.9 0.04 78;
+    --sidebar-accent-foreground: 0.2 0.06 42;
+    --sidebar-border: 0.86 0.025 80;
+    --sidebar-ring: 0.68 0.19 58;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: "General Sans", system-ui, sans-serif;
+  }
+
+  h1, h2, h3 {
+    font-family: "Fraunces", Georgia, serif;
+  }
+}
+
+
+================================================================================
+FILE: src/frontend/tailwind.config.js
+================================================================================
+import typography from "@tailwindcss/typography";
+import containerQueries from "@tailwindcss/container-queries";
+import animate from "tailwindcss-animate";
+
+/** @type {import('tailwindcss').Config} */
+export default {
+  darkMode: ["class"],
+  content: ["index.html", "src/**/*.{js,ts,jsx,tsx,html,css}"],
+  theme: {
+    container: {
+      center: true,
+      padding: "2rem",
+      screens: {
+        "2xl": "1400px",
+      },
+    },
+    extend: {
+      fontFamily: {
+        display: ["Fraunces", "Georgia", "serif"],
+        sans: ["General Sans", "system-ui", "sans-serif"],
+        ui: ["Bricolage Grotesque", "system-ui", "sans-serif"],
+      },
+      colors: {
+        border: "oklch(var(--border))",
+        input: "oklch(var(--input))",
+        ring: "oklch(var(--ring) / <alpha-value>)",
+        background: "oklch(var(--background))",
+        foreground: "oklch(var(--foreground))",
+        primary: {
+          DEFAULT: "oklch(var(--primary) / <alpha-value>)",
+          foreground: "oklch(var(--primary-foreground))",
+        },
+        secondary: {
+          DEFAULT: "oklch(var(--secondary) / <alpha-value>)",
+          foreground: "oklch(var(--secondary-foreground))",
+        },
+        destructive: {
+          DEFAULT: "oklch(var(--destructive) / <alpha-value>)",
+          foreground: "oklch(var(--destructive-foreground))",
+        },
+        muted: {
+          DEFAULT: "oklch(var(--muted) / <alpha-value>)",
+          foreground: "oklch(var(--muted-foreground) / <alpha-value>)",
+        },
+        accent: {
+          DEFAULT: "oklch(var(--accent) / <alpha-value>)",
+          foreground: "oklch(var(--accent-foreground))",
+        },
+        popover: {
+          DEFAULT: "oklch(var(--popover))",
+          foreground: "oklch(var(--popover-foreground))",
+        },
+        card: {
+          DEFAULT: "oklch(var(--card))",
+          foreground: "oklch(var(--card-foreground))",
+        },
+        chart: {
+          1: "oklch(var(--chart-1))",
+          2: "oklch(var(--chart-2))",
+          3: "oklch(var(--chart-3))",
+          4: "oklch(var(--chart-4))",
+          5: "oklch(var(--chart-5))",
+        },
+        sidebar: {
+          DEFAULT: "oklch(var(--sidebar))",
+          foreground: "oklch(var(--sidebar-foreground))",
+          primary: "oklch(var(--sidebar-primary))",
+          "primary-foreground": "oklch(var(--sidebar-primary-foreground))",
+          accent: "oklch(var(--sidebar-accent))",
+          "accent-foreground": "oklch(var(--sidebar-accent-foreground))",
+          border: "oklch(var(--sidebar-border))",
+          ring: "oklch(var(--sidebar-ring))",
+        },
+      },
+      borderRadius: {
+        lg: "var(--radius)",
+        md: "calc(var(--radius) - 2px)",
+        sm: "calc(var(--radius) - 4px)",
+      },
+      boxShadow: {
+        xs: "0 1px 2px 0 rgba(0,0,0,0.05)",
+      },
+      keyframes: {
+        "accordion-down": {
+          from: { height: "0" },
+          to: { height: "var(--radix-accordion-content-height)" },
+        },
+        "accordion-up": {
+          from: { height: "var(--radix-accordion-content-height)" },
+          to: { height: "0" },
+        },
+      },
+      animation: {
+        "accordion-down": "accordion-down 0.2s ease-out",
+        "accordion-up": "accordion-up 0.2s ease-out",
+      },
+    },
+  },
+  plugins: [typography, containerQueries, animate],
+};
+
+
+================================================================================
+FILE: src/frontend/vite.config.js
+================================================================================
+import { fileURLToPath, URL } from "url";
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
+import environment from "vite-plugin-environment";
+
+const ii_url =
+  process.env.DFX_NETWORK === "local"
+    ? `http://rdmx6-jaaaa-aaaaa-aaadq-cai.localhost:8081/`
+    : `https://identity.internetcomputer.org/`;
+
+process.env.II_URL = process.env.II_URL || ii_url;
+process.env.STORAGE_GATEWAY_URL =
+  process.env.STORAGE_GATEWAY_URL || "https://blob.caffeine.ai";
+
+export default defineConfig({
+  logLevel: "error",
+  build: {
+    emptyOutDir: true,
+    sourcemap: false,
+    minify: false,
+  },
+  css: {
+    postcss: "./postcss.config.js",
+  },
+  optimizeDeps: {
+    esbuildOptions: {
+      define: {
+        global: "globalThis",
+      },
+    },
+  },
+  server: {
+    proxy: {
+      "/api": {
+        target: "http://127.0.0.1:4943",
+        changeOrigin: true,
+      },
+    },
+  },
+  plugins: [
+    environment("all", { prefix: "CANISTER_" }),
+    environment("all", { prefix: "DFX_" }),
+    environment(["II_URL"]),
+    environment(["STORAGE_GATEWAY_URL"]),
+    react(),
+  ],
+  resolve: {
+    alias: [
+      {
+        find: "declarations",
+        replacement: fileURLToPath(new URL("../declarations", import.meta.url)),
+      },
+      {
+        find: "@",
+        replacement: fileURLToPath(new URL("./src", import.meta.url)),
+      },
+    ],
+    dedupe: ["@dfinity/agent"],
+  },
+});
+
+
+================================================================================
+FILE: src/frontend/tsconfig.json
+================================================================================
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "useDefineForClassFields": true,
+    "lib": ["DOM", "DOM.Iterable", "ESNext"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "esModuleInterop": false,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "noImplicitAny": false,
+    "forceConsistentCasingInFileNames": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "types": ["vite/client", "node"],
+    "paths": {
+      "declarations/*": ["../declarations/*"],
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "build",
+    "*.config.js"
+  ]
+}
+
+
+================================================================================
+FILE: src/frontend/src/main.tsx
+================================================================================
+import ReactDOM from "react-dom/client";
+import { InternetIdentityProvider } from "./hooks/useInternetIdentity";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import App from "./App";
+import "../index.css";
+
+BigInt.prototype.toJSON = function () {
+  return this.toString();
+};
+
+declare global {
+  interface BigInt {
+    toJSON(): string;
+  }
+}
+
+const queryClient = new QueryClient();
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <QueryClientProvider client={queryClient}>
+    <InternetIdentityProvider>
+      <App />
+    </InternetIdentityProvider>
+  </QueryClientProvider>,
+);
+
+
+================================================================================
+FILE: src/frontend/src/App.tsx
+================================================================================
+import { Toaster } from "@/components/ui/sonner";
+import { RouterProvider, createRouter } from "@tanstack/react-router";
+import { routeTree } from "./routes/routeTree";
+
+const router = createRouter({ routeTree });
+
+export default function App() {
+  return (
+    <>
+      <RouterProvider router={router} />
+      <Toaster richColors position="top-right" />
+    </>
+  );
+}
+
+
+================================================================================
+FILE: src/frontend/src/routes/routeTree.tsx
+================================================================================
+import { Outlet, createRootRoute, createRoute } from "@tanstack/react-router";
+import Layout from "../components/shared/Layout";
+import AdminPanel from "../pages/AdminPanel";
+import CustomerView from "../pages/CustomerView";
+import KitchenDashboard from "../pages/KitchenDashboard";
+
+const rootRoute = createRootRoute({
+  component: () => {
+    return (
+      <Layout>
+        <Outlet />
+      </Layout>
+    );
+  },
+});
+
+const customerRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/",
+  component: CustomerView,
+});
+
+const tableRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/table",
+  component: CustomerView,
+});
+
+const kitchenRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/kitchen",
+  component: KitchenDashboard,
+});
+
+const adminRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin",
+  component: AdminPanel,
+});
+
+export const routeTree = rootRoute.addChildren([
+  customerRoute,
+  tableRoute,
+  kitchenRoute,
+  adminRoute,
+]);
+
+
+================================================================================
+FILE: src/frontend/src/hooks/useInternetIdentity.ts
+================================================================================
+import {
+  type ReactNode,
+  type PropsWithChildren,
+  createContext,
+  createElement,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import {
+  AuthClient,
+  type AuthClientCreateOptions,
+  type AuthClientLoginOptions,
+} from "@dfinity/auth-client";
+import type { Identity } from "@icp-sdk/core/agent";
+import { DelegationIdentity, isDelegationValid } from "@icp-sdk/core/identity";
+import { loadConfig } from "../config";
+
+export type Status =
+  | "initializing"
+  | "idle"
+  | "logging-in"
+  | "success"
+  | "loginError";
+
+export type InternetIdentityContext = {
+  /** The identity is available after successfully loading the identity from local storage
+   * or completing the login process. */
+  identity?: Identity;
+
+  /** Connect to Internet Identity to login the user. */
+  login: () => void;
+
+  /** Clears the identity from the state and local storage. Effectively "logs the user out". */
+  clear: () => void;
+
+  /** The loginStatus of the login process. Note: The login loginStatus is not affected when a stored
+   * identity is loaded on mount. */
+  loginStatus: Status;
+
+  /** `loginStatus === "initializing"` */
+  isInitializing: boolean;
+
+  /** `loginStatus === "idle"` */
+  isLoginIdle: boolean;
+
+  /** `loginStatus === "logging-in"` */
+  isLoggingIn: boolean;
+
+  /** `loginStatus === "success"` */
+  isLoginSuccess: boolean;
+
+  /** `loginStatus === "loginError"` */
+  isLoginError: boolean;
+
+  loginError?: Error;
+};
+
+const ONE_HOUR_IN_NANOSECONDS = BigInt(3_600_000_000_000);
+const DEFAULT_IDENTITY_PROVIDER = process.env.II_URL;
+
+type ProviderValue = InternetIdentityContext;
+const InternetIdentityReactContext = createContext<ProviderValue | undefined>(
+  undefined,
+);
+
+/**
+ * Create the auth client with default options or options provided by the user.
+ */
+async function createAuthClient(
+  createOptions?: AuthClientCreateOptions,
+): Promise<AuthClient> {
+  const config = await loadConfig();
+  const options: AuthClientCreateOptions = {
+    idleOptions: {
+      // Default behaviour of this hook is not to logout and reload window on identity expiration
+      disableDefaultIdleCallback: true,
+      disableIdle: true,
+      ...createOptions?.idleOptions,
+    },
+    loginOptions: {
+      derivationOrigin: config.ii_derivation_origin,
+    },
+    ...createOptions,
+  };
+  const authClient = await AuthClient.create(options);
+  return authClient;
+}
+
+/**
+ * Helper function to set loginError state.
+ */
+function assertProviderPresent(
+  context: ProviderValue | undefined,
+): asserts context is ProviderValue {
+  if (!context) {
+    throw new Error(
+      "InternetIdentityProvider is not present. Wrap your component tree with it.",
+    );
+  }
+}
+
+/**
+ * Hook to access the internet identity as well as loginStatus along with
+ * login and clear functions.
+ */
+export const useInternetIdentity = (): InternetIdentityContext => {
+  const context = useContext(InternetIdentityReactContext);
+  assertProviderPresent(context);
+  return context;
+};
+
+/**
+ * The InternetIdentityProvider component makes the saved identity available
+ * after page reloads. It also allows you to configure default options
+ * for AuthClient and login.
+ *
+ *
+ * @example
+ * ```tsx
+ * <InternetIdentityProvider>
+ *   <App />
+ * </InternetIdentityProvider>
+ * ```
+ */
+export function InternetIdentityProvider({
+  children,
+  createOptions,
+}: PropsWithChildren<{
+  /** The child components that the InternetIdentityProvider will wrap. This allows any child
+   * component to access the authentication context provided by the InternetIdentityProvider. */
+  children: ReactNode;
+
+  /** Options for creating the {@link AuthClient}. See AuthClient documentation for list of options
+   *
+   * defaults to disabling the AuthClient idle handling (clearing identities
+   * from store and reloading the window on identity expiry). If that behaviour is preferred, set these settings:
+   *
+   * ```
+   * const options = {
+   *   idleOptions: {
+   *     disableDefaultIdleCallback: false,
+   *     disableIdle: false,
+   *   },
+   * }
+   * ```
+   */
+  createOptions?: AuthClientCreateOptions;
+}>) {
+  const [authClient, setAuthClient] = useState<AuthClient | undefined>(
+    undefined,
+  );
+  const [identity, setIdentity] = useState<Identity | undefined>(undefined);
+  const [loginStatus, setStatus] = useState<Status>("initializing");
+  const [loginError, setError] = useState<Error | undefined>(undefined);
+
+  const setErrorMessage = useCallback((message: string) => {
+    setStatus("loginError");
+    setError(new Error(message));
+  }, []);
+
+  const handleLoginSuccess = useCallback(() => {
+    const latestIdentity = authClient?.getIdentity();
+    if (!latestIdentity) {
+      setErrorMessage("Identity not found after successful login");
+      return;
+    }
+    setIdentity(latestIdentity);
+    setStatus("success");
+  }, [authClient, setErrorMessage]);
+
+  const handleLoginError = useCallback(
+    (maybeError?: string) => {
+      setErrorMessage(maybeError ?? "Login failed");
+    },
+    [setErrorMessage],
+  );
+
+  const login = useCallback(() => {
+    if (!authClient) {
+      setErrorMessage(
+        "AuthClient is not initialized yet, make sure to call `login` on user interaction e.g. click.",
+      );
+      return;
+    }
+
+    const currentIdentity = authClient.getIdentity();
+    if (
+      !currentIdentity.getPrincipal().isAnonymous() &&
+      currentIdentity instanceof DelegationIdentity &&
+      isDelegationValid(currentIdentity.getDelegation())
+    ) {
+      setErrorMessage("User is already authenticated");
+      return;
+    }
+
+    const options: AuthClientLoginOptions = {
+      identityProvider: DEFAULT_IDENTITY_PROVIDER,
+      onSuccess: handleLoginSuccess,
+      onError: handleLoginError,
+      maxTimeToLive: ONE_HOUR_IN_NANOSECONDS * BigInt(24 * 30), // 30 days
+    };
+
+    setStatus("logging-in");
+    void authClient.login(options);
+  }, [authClient, handleLoginError, handleLoginSuccess, setErrorMessage]);
+
+  const clear = useCallback(() => {
+    if (!authClient) {
+      setErrorMessage("Auth client not initialized");
+      return;
+    }
+
+    void authClient
+      .logout()
+      .then(() => {
+        setIdentity(undefined);
+        setAuthClient(undefined);
+        setStatus("idle");
+        setError(undefined);
+      })
+      .catch((unknownError: unknown) => {
+        setStatus("loginError");
+        setError(
+          unknownError instanceof Error
+            ? unknownError
+            : new Error("Logout failed"),
+        );
+      });
+  }, [authClient, setErrorMessage]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        setStatus("initializing");
+        let existingClient = authClient;
+        if (!existingClient) {
+          existingClient = await createAuthClient(createOptions);
+          if (cancelled) return;
+          setAuthClient(existingClient);
+        }
+        const isAuthenticated = await existingClient.isAuthenticated();
+        if (cancelled) return;
+        if (isAuthenticated) {
+          const loadedIdentity = existingClient.getIdentity();
+          setIdentity(loadedIdentity);
+        }
+      } catch (unknownError) {
+        setStatus("loginError");
+        setError(
+          unknownError instanceof Error
+            ? unknownError
+            : new Error("Initialization failed"),
+        );
+      } finally {
+        if (!cancelled) setStatus("idle");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [createOptions, authClient]);
+
+  const value = useMemo<ProviderValue>(
+    () => ({
+      identity,
+      login,
+      clear,
+      loginStatus,
+      isInitializing: loginStatus === "initializing",
+      isLoginIdle: loginStatus === "idle",
+      isLoggingIn: loginStatus === "logging-in",
+      isLoginSuccess: loginStatus === "success",
+      isLoginError: loginStatus === "loginError",
+      loginError,
+    }),
+    [identity, login, clear, loginStatus, loginError],
+  );
+
+  return createElement(InternetIdentityReactContext.Provider, {
+    value,
+    children,
+  });
+}
+
+
+================================================================================
+FILE: src/frontend/src/hooks/useActor.ts
+================================================================================
+import { useInternetIdentity } from "./useInternetIdentity";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
+import { type backendInterface } from "../backend";
+import { createActorWithConfig } from "../config";
+import { getSecretParameter } from "../utils/urlParams";
+
+const ACTOR_QUERY_KEY = "actor";
+export function useActor() {
+  const { identity } = useInternetIdentity();
+  const queryClient = useQueryClient();
+  const actorQuery = useQuery<backendInterface>({
+    queryKey: [ACTOR_QUERY_KEY, identity?.getPrincipal().toString()],
+    queryFn: async () => {
+      const isAuthenticated = !!identity;
+
+      if (!isAuthenticated) {
+        // Return anonymous actor if not authenticated
+        return await createActorWithConfig();
+      }
+
+      const actorOptions = {
+        agentOptions: {
+          identity,
+        },
+      };
+
+      const actor = await createActorWithConfig(actorOptions);
+      const adminToken = getSecretParameter("caffeineAdminToken") || "";
+      await actor._initializeAccessControlWithSecret(adminToken);
+      return actor;
+    },
+    // Only refetch when identity changes
+    staleTime: Infinity,
+    // This will cause the actor to be recreated when the identity changes
+    enabled: true,
+  });
+
+  // When the actor changes, invalidate dependent queries
+  useEffect(() => {
+    if (actorQuery.data) {
+      queryClient.invalidateQueries({
+        predicate: (query) => {
+          return !query.queryKey.includes(ACTOR_QUERY_KEY);
+        },
+      });
+      queryClient.refetchQueries({
+        predicate: (query) => {
+          return !query.queryKey.includes(ACTOR_QUERY_KEY);
+        },
+      });
+    }
+  }, [actorQuery.data, queryClient]);
+
+  return {
+    actor: actorQuery.data || null,
+    isFetching: actorQuery.isFetching,
+  };
+}
+
+
+================================================================================
+FILE: src/frontend/src/hooks/useQueries.ts
+================================================================================
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { MenuItem, Order, OrderItem, OrderStatus } from "../backend";
+import { useActor } from "./useActor";
+
+// ─── Menu Queries ───────────────────────────────────────────────────────────
+
+export function useGetMenu() {
+  const { actor, isFetching } = useActor();
+  return useQuery<MenuItem[]>({
+    queryKey: ["menu"],
+    queryFn: async () => {
+      if (!actor) return [];
+      return actor.getMenu();
+    },
+    enabled: !!actor && !isFetching,
+    staleTime: 30_000,
+  });
+}
+
+export function useGetMenuByCategory(category: string) {
+  const { actor, isFetching } = useActor();
+  return useQuery<MenuItem[]>({
+    queryKey: ["menu", "category", category],
+    queryFn: async () => {
+      if (!actor) return [];
+      return actor.getMenuByCategory(category);
+    },
+    enabled: !!actor && !isFetching && !!category,
+    staleTime: 30_000,
+  });
+}
+
+// ─── Order Queries ───────────────────────────────────────────────────────────
+
+export function useGetTableOrders(tableNumber: number | null) {
+  const { actor, isFetching } = useActor();
+  return useQuery<Order[]>({
+    queryKey: ["tableOrders", tableNumber],
+    queryFn: async () => {
+      if (!actor || tableNumber === null) return [];
+      return actor.getTableOrders(BigInt(tableNumber));
+    },
+    enabled: !!actor && !isFetching && tableNumber !== null,
+    refetchInterval: 5_000,
+  });
+}
+
+export function useGetActiveKitchenOrders() {
+  const { actor, isFetching } = useActor();
+  return useQuery<Order[]>({
+    queryKey: ["kitchenOrders"],
+    queryFn: async () => {
+      if (!actor) return [];
+      return actor.getActiveKitchenOrders();
+    },
+    enabled: !!actor && !isFetching,
+    refetchInterval: 5_000,
+  });
+}
+
+export function useGetTableBill(tableNumber: number | null) {
+  const { actor, isFetching } = useActor();
+  return useQuery<number>({
+    queryKey: ["tableBill", tableNumber],
+    queryFn: async () => {
+      if (!actor || tableNumber === null) return 0;
+      return actor.getTableBill(BigInt(tableNumber));
+    },
+    enabled: !!actor && !isFetching && tableNumber !== null,
+  });
+}
+
+export function useIsCallerAdmin() {
+  const { actor, isFetching } = useActor();
+  return useQuery<boolean>({
+    queryKey: ["isCallerAdmin"],
+    queryFn: async () => {
+      if (!actor) return false;
+      return actor.isCallerAdmin();
+    },
+    enabled: !!actor && !isFetching,
+    staleTime: 30_000,
+  });
+}
+
+// ─── Mutations ───────────────────────────────────────────────────────────────
+
+export function usePlaceOrder() {
+  const { actor } = useActor();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      tableNumber,
+      items,
+    }: {
+      tableNumber: number;
+      items: OrderItem[];
+    }) => {
+      if (!actor) throw new Error("Not connected");
+      return actor.placeOrder(BigInt(tableNumber), items);
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: ["tableOrders", variables.tableNumber],
+      });
+    },
+  });
+}
+
+export function useConfirmOrder() {
+  const { actor } = useActor();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      id,
+      estimatedMinutes,
+    }: {
+      id: bigint;
+      estimatedMinutes: number;
+    }) => {
+      if (!actor) throw new Error("Not connected");
+      return actor.confirmOrder(id, BigInt(estimatedMinutes));
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["kitchenOrders"] });
+    },
+  });
+}
+
+export function useMarkOrderReady() {
+  const { actor } = useActor();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: bigint) => {
+      if (!actor) throw new Error("Not connected");
+      return actor.markOrderReady(id);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["kitchenOrders"] });
+    },
+  });
+}
+
+export function usePayBill() {
+  const { actor } = useActor();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (tableNumber: number) => {
+      if (!actor) throw new Error("Not connected");
+      return actor.payBill(BigInt(tableNumber));
+    },
+    onSuccess: (_, tableNumber) => {
+      queryClient.invalidateQueries({
+        queryKey: ["tableOrders", tableNumber],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["tableBill", tableNumber],
+      });
+    },
+  });
+}
+
+export function useCreateMenuItem() {
+  const { actor } = useActor();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (item: {
+      name: string;
+      description: string;
+      price: number;
+      category: string;
+      imageUrl: string;
+    }) => {
+      if (!actor) throw new Error("Not connected");
+      return actor.createMenuItem(
+        item.name,
+        item.description,
+        item.price,
+        item.category,
+        item.imageUrl,
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["menu"] });
+    },
+  });
+}
+
+export function useUpdateMenuItem() {
+  const { actor } = useActor();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (item: {
+      id: bigint;
+      name: string;
+      description: string;
+      price: number;
+      category: string;
+      imageUrl: string;
+    }) => {
+      if (!actor) throw new Error("Not connected");
+      return actor.updateMenuItem(
+        item.id,
+        item.name,
+        item.description,
+        item.price,
+        item.category,
+        item.imageUrl,
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["menu"] });
+    },
+  });
+}
+
+export function useDeleteMenuItem() {
+  const { actor } = useActor();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: bigint) => {
+      if (!actor) throw new Error("Not connected");
+      return actor.deleteMenuItem(id);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["menu"] });
+    },
+  });
+}
+
+export function useToggleMenuItemAvailability() {
+  const { actor } = useActor();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: bigint) => {
+      if (!actor) throw new Error("Not connected");
+      return actor.toggleMenuItemAvailability(id);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["menu"] });
+    },
+  });
+}
+
+// ─── Re-exports ──────────────────────────────────────────────────────────────
+
+export type { MenuItem, Order, OrderItem, OrderStatus };
+
+
+================================================================================
+FILE: src/frontend/src/lib/utils.ts
+================================================================================
+import type { ClassValue } from "clsx";
+import { clsx } from "clsx";
+import { twMerge } from "tailwind-merge";
+
+export function cn(...inputs: ClassValue[]): string {
+  return twMerge(clsx(inputs));
+}
+
+
+================================================================================
+FILE: src/frontend/src/utils/urlParams.ts
+================================================================================
+/**
+ * Utility functions for parsing and managing URL parameters
+ * Works with both hash-based and browser-based routing
+ */
+
+/**
+ * Extracts a URL parameter from the current URL
+ * Works with both query strings (?param=value) and hash-based routing (#/?param=value)
+ *
+ * @param paramName - The name of the parameter to extract
+ * @returns The parameter value if found, null otherwise
+ */
+export function getUrlParameter(paramName: string): string | null {
+  // Try to get from regular query string first
+  const urlParams = new URLSearchParams(window.location.search);
+  const regularParam = urlParams.get(paramName);
+
+  if (regularParam !== null) {
+    return regularParam;
+  }
+
+  // If not found, try to extract from hash (for hash-based routing)
+  const hash = window.location.hash;
+  const queryStartIndex = hash.indexOf("?");
+
+  if (queryStartIndex !== -1) {
+    const hashQuery = hash.substring(queryStartIndex + 1);
+    const hashParams = new URLSearchParams(hashQuery);
+    return hashParams.get(paramName);
+  }
+
+  return null;
+}
+
+/**
+ * Stores a parameter in sessionStorage for persistence across navigation
+ * Useful for maintaining state like admin tokens throughout the session
+ *
+ * @param key - The key to store the value under
+ * @param value - The value to store
+ */
+export function storeSessionParameter(key: string, value: string): void {
+  try {
+    sessionStorage.setItem(key, value);
+  } catch (error) {
+    console.warn(`Failed to store session parameter ${key}:`, error);
+  }
+}
+
+/**
+ * Retrieves a parameter from sessionStorage
+ *
+ * @param key - The key to retrieve
+ * @returns The stored value if found, null otherwise
+ */
+export function getSessionParameter(key: string): string | null {
+  try {
+    return sessionStorage.getItem(key);
+  } catch (error) {
+    console.warn(`Failed to retrieve session parameter ${key}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Gets a parameter from URL or sessionStorage (URL takes precedence)
+ * If found in URL, also stores it in sessionStorage for future use
+ *
+ * @param paramName - The name of the parameter to retrieve
+ * @param storageKey - Optional custom storage key (defaults to paramName)
+ * @returns The parameter value if found, null otherwise
+ */
+export function getPersistedUrlParameter(
+  paramName: string,
+  storageKey?: string,
+): string | null {
+  const key = storageKey || paramName;
+
+  // Check URL first
+  const urlValue = getUrlParameter(paramName);
+  if (urlValue !== null) {
+    // Store in session for persistence
+    storeSessionParameter(key, urlValue);
+    return urlValue;
+  }
+
+  // Fall back to session storage
+  return getSessionParameter(key);
+}
+
+/**
+ * Removes a parameter from sessionStorage
+ *
+ * @param key - The key to remove
+ */
+export function clearSessionParameter(key: string): void {
+  try {
+    sessionStorage.removeItem(key);
+  } catch (error) {
+    console.warn(`Failed to clear session parameter ${key}:`, error);
+  }
+}
+
+/**
+ * Removes a specific parameter from the URL hash without reloading the page
+ * Preserves route information and other parameters in the hash
+ * Used to remove sensitive data from the address bar after extracting it
+ *
+ * @param paramName - The parameter to remove from the hash
+ *
+ * @example
+ * // URL: https://app.com/#/dashboard?caffeineAdminToken=xxx&other=value
+ * // After clearParamFromHash('caffeineAdminToken')
+ * // URL: https://app.com/#/dashboard?other=value
+ */
+function clearParamFromHash(paramName: string): void {
+  if (!window.history.replaceState) {
+    return;
+  }
+
+  const hash = window.location.hash;
+  if (!hash || hash.length <= 1) {
+    return;
+  }
+
+  // Remove the leading #
+  const hashContent = hash.substring(1);
+
+  // Split route path from query string
+  const queryStartIndex = hashContent.indexOf("?");
+
+  if (queryStartIndex === -1) {
+    // No query string in hash, nothing to remove
+    return;
+  }
+
+  const routePath = hashContent.substring(0, queryStartIndex);
+  const queryString = hashContent.substring(queryStartIndex + 1);
+
+  // Parse and remove the specific parameter
+  const params = new URLSearchParams(queryString);
+  params.delete(paramName);
+
+  // Reconstruct the URL
+  const newQueryString = params.toString();
+  let newHash = routePath;
+
+  if (newQueryString) {
+    newHash += `?${newQueryString}`;
+  }
+
+  // If we still have content in the hash, keep it; otherwise remove the hash entirely
+  const newUrl =
+    window.location.pathname +
+    window.location.search +
+    (newHash ? `#${newHash}` : "");
+  window.history.replaceState(null, "", newUrl);
+}
+
+/**
+ * Gets a secret from the URL hash fragment only (more secure than query params)
+ * Hash fragments aren't sent to servers or logged in access logs
+ * The hash is immediately cleared from the URL after extraction to prevent history leakage
+ *
+ * Usage: https://yourapp.com/#secret=xxx
+ *
+ * @param paramName - The name of the secret parameter
+ * @returns The secret value if found (from hash or session), null otherwise
+ */
+export function getSecretFromHash(paramName: string): string | null {
+  // Check session first to avoid unnecessary URL manipulation
+  const existingSecret = getSessionParameter(paramName);
+  if (existingSecret !== null) {
+    return existingSecret;
+  }
+
+  // Try to extract from hash
+  const hash = window.location.hash;
+  if (!hash || hash.length <= 1) {
+    return null;
+  }
+
+  // Remove the leading #
+  const hashContent = hash.substring(1);
+  const params = new URLSearchParams(hashContent);
+  const secret = params.get(paramName);
+
+  if (secret) {
+    // Store in session for persistence
+    storeSessionParameter(paramName, secret);
+    // Immediately clear the secret parameter from URL to avoid history leakage
+    clearParamFromHash(paramName);
+    return secret;
+  }
+
+  return null;
+}
+
+/**
+ * Gets a secret parameter with fallback chain: hash -> sessionStorage
+ * This is the recommended way to handle sensitive parameters like admin tokens
+ *
+ * Security benefits over regular URL params:
+ * - Hash fragments are not sent to the server
+ * - Not logged in server access logs
+ * - Not sent in HTTP Referer headers
+ * - Automatically cleared from URL after extraction
+ *
+ * @param paramName - The name of the secret parameter
+ * @returns The secret value if found, null otherwise
+ */
+export function getSecretParameter(paramName: string): string | null {
+  return getSecretFromHash(paramName);
+}
+
+
+================================================================================
+FILE: src/frontend/src/components/shared/Layout.tsx
+================================================================================
+import { Button } from "@/components/ui/button";
+import { Link, useLocation } from "@tanstack/react-router";
+import {
+  ChefHat,
+  LogIn,
+  LogOut,
+  Settings,
+  UtensilsCrossed,
+} from "lucide-react";
+import type { ReactNode } from "react";
+import { useInternetIdentity } from "../../hooks/useInternetIdentity";
+
+interface LayoutProps {
+  children: ReactNode;
+}
+
+export default function Layout({ children }: LayoutProps) {
+  const location = useLocation();
+  const { login, clear, identity, isLoggingIn, isInitializing } =
+    useInternetIdentity();
+
+  const currentPath = location.pathname;
+
+  const navLinks = [
+    {
+      path: "/",
+      label: "Customer View",
+      icon: UtensilsCrossed,
+      ocid: "nav.customer_link",
+    },
+    {
+      path: "/kitchen",
+      label: "Kitchen",
+      icon: ChefHat,
+      ocid: "nav.kitchen_link",
+    },
+    { path: "/admin", label: "Admin", icon: Settings, ocid: "nav.admin_link" },
+  ];
+
+  const isActive = (path: string) => {
+    if (path === "/" && currentPath === "/") return true;
+    if (path !== "/" && currentPath.startsWith(path)) return true;
+    return false;
+  };
+
+  return (
+    <div className="min-h-screen flex flex-col bg-background">
+      {/* Top navigation */}
+      <header className="sticky top-0 z-50 bg-card/95 backdrop-blur-sm border-b border-border shadow-xs">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+          {/* Logo */}
+          <Link to="/" className="flex items-center gap-2 group">
+            <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center">
+              <UtensilsCrossed className="w-4 h-4 text-primary-foreground" />
+            </div>
+            <span className="font-display text-xl font-semibold text-foreground tracking-tight">
+              TableServe
+            </span>
+          </Link>
+
+          {/* Navigation links */}
+          <nav className="hidden md:flex items-center gap-1">
+            {navLinks.map(({ path, label, icon: Icon, ocid }) => (
+              <Link
+                key={path}
+                to={path}
+                data-ocid={ocid}
+                className={`
+                  flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-ui font-medium transition-all
+                  ${
+                    isActive(path)
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                  }
+                `}
+              >
+                <Icon className="w-4 h-4" />
+                {label}
+              </Link>
+            ))}
+          </nav>
+
+          {/* Mobile nav + Auth */}
+          <div className="flex items-center gap-3">
+            {/* Mobile nav */}
+            <nav className="flex md:hidden items-center gap-1">
+              {navLinks.map(({ path, icon: Icon, ocid }) => (
+                <Link
+                  key={path}
+                  to={path}
+                  data-ocid={ocid}
+                  className={`
+                    p-2 rounded-lg transition-all
+                    ${
+                      isActive(path)
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                    }
+                  `}
+                >
+                  <Icon className="w-5 h-5" />
+                </Link>
+              ))}
+            </nav>
+
+            {/* Auth button */}
+            {identity ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={clear}
+                data-ocid="auth.logout_button"
+                className="font-ui"
+              >
+                <LogOut className="w-4 h-4 mr-1" />
+                <span className="hidden sm:inline">Sign Out</span>
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                onClick={login}
+                disabled={isLoggingIn || isInitializing}
+                data-ocid="auth.login_button"
+                className="font-ui"
+              >
+                <LogIn className="w-4 h-4 mr-1" />
+                <span className="hidden sm:inline">
+                  {isLoggingIn ? "Signing in..." : "Sign In"}
+                </span>
+              </Button>
+            )}
+          </div>
+        </div>
+      </header>
+
+      {/* Main content */}
+      <main className="flex-1">{children}</main>
+
+      {/* Footer */}
+      <footer className="border-t border-border bg-card py-4 text-center">
+        <p className="text-sm text-muted-foreground font-ui">
+          © {new Date().getFullYear()}. Built with{" "}
+          <span className="text-primary">♥</span> using{" "}
+          <a
+            href={`https://caffeine.ai?utm_source=caffeine-footer&utm_medium=referral&utm_content=${encodeURIComponent(window.location.hostname)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary hover:underline"
+          >
+            caffeine.ai
+          </a>
+        </p>
+      </footer>
+    </div>
+  );
+}
+
+
+================================================================================
+FILE: src/frontend/src/pages/CustomerView.tsx
+================================================================================
+import { useState } from "react";
+import BillView from "../components/restaurant/BillView";
+import MenuView from "../components/restaurant/MenuView";
+import OrderStatusView from "../components/restaurant/OrderStatusView";
+import TableSelector from "../components/restaurant/TableSelector";
+import type { OrderItem } from "../hooks/useQueries";
+
+type CustomerScreen = "table-select" | "menu" | "order-status" | "bill";
+
+export interface CartItem {
+  menuItemId: bigint;
+  name: string;
+  price: number;
+  quantity: number;
+}
+
+export default function CustomerView() {
+  const [screen, setScreen] = useState<CustomerScreen>("table-select");
+  const [tableNumber, setTableNumber] = useState<number | null>(null);
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [placedOrderId, setPlacedOrderId] = useState<bigint | null>(null);
+
+  const handleTableSelect = (table: number) => {
+    setTableNumber(table);
+    setCart([]);
+    setScreen("menu");
+  };
+
+  const handleAddToCart = (item: {
+    menuItemId: bigint;
+    name: string;
+    price: number;
+  }) => {
+    setCart((prev) => {
+      const existing = prev.find((c) => c.menuItemId === item.menuItemId);
+      if (existing) {
+        return prev.map((c) =>
+          c.menuItemId === item.menuItemId
+            ? { ...c, quantity: c.quantity + 1 }
+            : c,
+        );
+      }
+      return [...prev, { ...item, quantity: 1 }];
+    });
+  };
+
+  const handleUpdateCartQuantity = (menuItemId: bigint, delta: number) => {
+    setCart((prev) => {
+      const updated = prev.map((c) =>
+        c.menuItemId === menuItemId
+          ? { ...c, quantity: Math.max(0, c.quantity + delta) }
+          : c,
+      );
+      return updated.filter((c) => c.quantity > 0);
+    });
+  };
+
+  const handleRemoveFromCart = (menuItemId: bigint) => {
+    setCart((prev) => prev.filter((c) => c.menuItemId !== menuItemId));
+  };
+
+  const handleOrderPlaced = (orderId: bigint) => {
+    setPlacedOrderId(orderId);
+    setCart([]);
+    setScreen("order-status");
+  };
+
+  const cartAsOrderItems = (): OrderItem[] =>
+    cart.map((item) => ({
+      menuItemId: item.menuItemId,
+      name: item.name,
+      price: item.price,
+      quantity: BigInt(item.quantity),
+    }));
+
+  return (
+    <div className="flex-1">
+      {screen === "table-select" && (
+        <TableSelector onTableSelect={handleTableSelect} />
+      )}
+      {screen === "menu" && tableNumber !== null && (
+        <MenuView
+          tableNumber={tableNumber}
+          cart={cart}
+          onAddToCart={handleAddToCart}
+          onUpdateQuantity={handleUpdateCartQuantity}
+          onRemoveItem={handleRemoveFromCart}
+          onOrderPlaced={handleOrderPlaced}
+          onChangeTable={() => setScreen("table-select")}
+          cartAsOrderItems={cartAsOrderItems}
+        />
+      )}
+      {screen === "order-status" && tableNumber !== null && (
+        <OrderStatusView
+          tableNumber={tableNumber}
+          orderId={placedOrderId}
+          onViewBill={() => setScreen("bill")}
+          onNewOrder={() => {
+            setScreen("menu");
+            setCart([]);
+          }}
+        />
+      )}
+      {screen === "bill" && tableNumber !== null && (
+        <BillView
+          tableNumber={tableNumber}
+          onBack={() => setScreen("order-status")}
+          onPaySuccess={() => {
+            setTableNumber(null);
+            setCart([]);
+            setPlacedOrderId(null);
+            setScreen("table-select");
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+
+================================================================================
+FILE: src/frontend/src/components/restaurant/TableSelector.tsx
+================================================================================
+import { Button } from "@/components/ui/button";
+import { UtensilsCrossed } from "lucide-react";
+import { motion } from "motion/react";
+
+interface TableSelectorProps {
+  onTableSelect: (tableNumber: number) => void;
+}
+
+export default function TableSelector({ onTableSelect }: TableSelectorProps) {
+  return (
+    <div className="min-h-[calc(100vh-4rem)] flex flex-col">
+      {/* Hero image */}
+      <div className="relative h-48 sm:h-64 overflow-hidden">
+        <img
+          src="/assets/generated/restaurant-hero.dim_1200x400.jpg"
+          alt="TableServe restaurant"
+          className="w-full h-full object-cover"
+        />
+        <div className="absolute inset-0 bg-gradient-to-b from-foreground/10 to-foreground/60" />
+        <div className="absolute inset-0 flex items-center justify-center">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6 }}
+            className="text-center"
+          >
+            <div className="flex items-center justify-center gap-3 mb-2">
+              <UtensilsCrossed className="w-8 h-8 text-white" />
+              <h1 className="font-display text-4xl sm:text-5xl font-bold text-white">
+                TableServe
+              </h1>
+            </div>
+            <p className="text-white/90 text-lg font-ui">
+              Fine dining, effortlessly ordered
+            </p>
+          </motion.div>
+        </div>
+      </div>
+
+      {/* Table selector */}
+      <div className="flex-1 max-w-3xl mx-auto w-full px-4 py-8">
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.2 }}
+        >
+          <div className="text-center mb-8">
+            <h2 className="font-display text-2xl sm:text-3xl text-foreground mb-2">
+              Welcome!
+            </h2>
+            <p className="text-muted-foreground font-ui text-base">
+              Please tap your table number to get started
+            </p>
+          </div>
+
+          <div className="grid grid-cols-4 sm:grid-cols-5 gap-3">
+            {Array.from({ length: 20 }, (_, i) => i + 1).map((tableNum) => (
+              <motion.div
+                key={tableNum}
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.96 }}
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: tableNum * 0.03, duration: 0.3 }}
+              >
+                <Button
+                  data-ocid={`table.item.${tableNum}`}
+                  onClick={() => onTableSelect(tableNum)}
+                  className="w-full h-16 sm:h-20 text-lg sm:text-xl font-display font-bold
+                    bg-card hover:bg-primary hover:text-primary-foreground
+                    text-foreground border-2 border-border hover:border-primary
+                    rounded-xl shadow-xs transition-all duration-200"
+                  variant="outline"
+                >
+                  {tableNum}
+                </Button>
+              </motion.div>
+            ))}
+          </div>
+
+          <div className="mt-8 text-center">
+            <p className="text-sm text-muted-foreground font-ui">
+              Each table has a unique ordering experience
+            </p>
+          </div>
+        </motion.div>
+      </div>
+    </div>
+  );
+}
+
+
+================================================================================
+FILE: src/frontend/src/components/restaurant/MenuView.tsx
+================================================================================
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ArrowLeft, Minus, Plus, ShoppingCart, Trash2, X } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import { useState } from "react";
+import { toast } from "sonner";
+import { useGetMenu } from "../../hooks/useQueries";
+import { usePlaceOrder } from "../../hooks/useQueries";
+import type { OrderItem } from "../../hooks/useQueries";
+import type { CartItem } from "../../pages/CustomerView";
+
+// Category display label -> backend category string
+const CATEGORIES: {
+  label: string;
+  value: string;
+  emoji: string;
+  fallbackImage: string;
+}[] = [
+  {
+    label: "Sabji / Vegetables",
+    value: "Sabji",
+    emoji: "🥘",
+    fallbackImage: "/assets/generated/food-sabji.dim_600x400.jpg",
+  },
+  {
+    label: "Roti / Bread",
+    value: "Roti",
+    emoji: "🫓",
+    fallbackImage: "/assets/generated/food-roti.dim_600x400.jpg",
+  },
+  {
+    label: "Rice",
+    value: "Rice",
+    emoji: "🍚",
+    fallbackImage: "/assets/generated/food-rice.dim_600x400.jpg",
+  },
+  {
+    label: "Sides",
+    value: "Sides",
+    emoji: "🥗",
+    fallbackImage: "/assets/generated/food-sides.dim_600x400.jpg",
+  },
+  {
+    label: "Drinks",
+    value: "Drinks",
+    emoji: "🥤",
+    fallbackImage: "/assets/generated/food-drinks.dim_600x400.jpg",
+  },
+];
+
+const getCategoryFallback = (category: string): string => {
+  const cat = CATEGORIES.find(
+    (c) => c.value.toLowerCase() === category.toLowerCase(),
+  );
+  return cat?.fallbackImage ?? "/assets/generated/food-sabji.dim_600x400.jpg";
+};
+
+interface MenuViewProps {
+  tableNumber: number;
+  cart: CartItem[];
+  onAddToCart: (item: {
+    menuItemId: bigint;
+    name: string;
+    price: number;
+  }) => void;
+  onUpdateQuantity: (menuItemId: bigint, delta: number) => void;
+  onRemoveItem: (menuItemId: bigint) => void;
+  onOrderPlaced: (orderId: bigint) => void;
+  onChangeTable: () => void;
+  cartAsOrderItems: () => OrderItem[];
+}
+
+export default function MenuView({
+  tableNumber,
+  cart,
+  onAddToCart,
+  onUpdateQuantity,
+  onRemoveItem,
+  onOrderPlaced,
+  onChangeTable,
+  cartAsOrderItems,
+}: MenuViewProps) {
+  const [cartOpen, setCartOpen] = useState(false);
+  const { data: menuItems = [], isLoading } = useGetMenu();
+  const { mutateAsync: placeOrder, isPending: isPlacing } = usePlaceOrder();
+
+  const totalItems = cart.reduce((sum, c) => sum + c.quantity, 0);
+  const totalPrice = cart.reduce((sum, c) => sum + c.price * c.quantity, 0);
+
+  const formatINR = (amount: number) =>
+    `₹${amount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  const getItemsByCategory = (categoryValue: string) =>
+    menuItems.filter(
+      (item) =>
+        item.category.toLowerCase() === categoryValue.toLowerCase() &&
+        item.available,
+    );
+
+  const getCartQuantity = (menuItemId: bigint) => {
+    const item = cart.find((c) => c.menuItemId === menuItemId);
+    return item?.quantity ?? 0;
+  };
+
+  const handlePlaceOrder = async () => {
+    if (cart.length === 0) return;
+    try {
+      const orderId = await placeOrder({
+        tableNumber,
+        items: cartAsOrderItems(),
+      });
+      toast.success("Order placed successfully!");
+      setCartOpen(false);
+      onOrderPlaced(orderId);
+    } catch {
+      toast.error("Failed to place order. Please try again.");
+    }
+  };
+
+  return (
+    <div className="min-h-[calc(100vh-4rem)] flex flex-col">
+      {/* Sub-header */}
+      <div className="bg-card border-b border-border px-4 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onChangeTable}
+            className="font-ui gap-1 text-muted-foreground"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Change Table
+          </Button>
+          <div className="h-4 w-px bg-border" />
+          <div>
+            <span className="font-display font-semibold text-foreground text-lg">
+              Table {tableNumber}
+            </span>
+          </div>
+        </div>
+
+        {/* Floating cart button */}
+        <Sheet open={cartOpen} onOpenChange={setCartOpen}>
+          <SheetTrigger asChild>
+            <Button
+              data-ocid="cart.open_modal_button"
+              className="relative font-ui"
+              size="sm"
+            >
+              <ShoppingCart className="w-4 h-4 mr-2" />
+              Cart
+              {totalItems > 0 && (
+                <Badge
+                  className="absolute -top-2 -right-2 h-5 w-5 flex items-center justify-center p-0 text-xs"
+                  variant="destructive"
+                >
+                  {totalItems}
+                </Badge>
+              )}
+            </Button>
+          </SheetTrigger>
+          <SheetContent
+            className="w-full sm:max-w-md flex flex-col"
+            data-ocid="cart.modal"
+          >
+            <SheetHeader>
+              <SheetTitle className="font-display text-xl">
+                Your Order — Table {tableNumber}
+              </SheetTitle>
+            </SheetHeader>
+
+            <div className="flex-1 overflow-y-auto py-4">
+              {cart.length === 0 ? (
+                <div
+                  data-ocid="cart.empty_state"
+                  className="flex flex-col items-center justify-center h-40 text-center"
+                >
+                  <ShoppingCart className="w-12 h-12 text-muted-foreground/40 mb-3" />
+                  <p className="text-muted-foreground font-ui">
+                    Your cart is empty
+                  </p>
+                  <p className="text-sm text-muted-foreground/70 font-ui mt-1">
+                    Add items from the menu
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {cart.map((item) => (
+                    <div
+                      key={item.menuItemId.toString()}
+                      className="flex items-center gap-3 bg-accent/30 rounded-xl p-3"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="font-ui font-medium text-sm text-foreground truncate">
+                          {item.name}
+                        </p>
+                        <p className="text-sm text-muted-foreground font-ui">
+                          {formatINR(item.price * item.quantity)}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => onUpdateQuantity(item.menuItemId, -1)}
+                        >
+                          <Minus className="w-3 h-3" />
+                        </Button>
+                        <span className="font-ui font-semibold w-5 text-center text-sm">
+                          {item.quantity}
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => onUpdateQuantity(item.menuItemId, 1)}
+                        >
+                          <Plus className="w-3 h-3" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-destructive hover:text-destructive"
+                          onClick={() => onRemoveItem(item.menuItemId)}
+                        >
+                          <X className="w-3 h-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {cart.length > 0 && (
+              <div className="border-t border-border pt-4 space-y-4">
+                <div className="flex items-center justify-between font-ui">
+                  <span className="text-muted-foreground">Total</span>
+                  <span className="font-semibold text-lg text-foreground">
+                    {formatINR(totalPrice)}
+                  </span>
+                </div>
+                <Button
+                  data-ocid="cart.submit_button"
+                  className="w-full font-ui font-semibold"
+                  size="lg"
+                  disabled={isPlacing}
+                  onClick={handlePlaceOrder}
+                >
+                  {isPlacing
+                    ? "Placing Order..."
+                    : `Place Order — ${formatINR(totalPrice)}`}
+                </Button>
+              </div>
+            )}
+          </SheetContent>
+        </Sheet>
+      </div>
+
+      {/* Menu content */}
+      <div className="flex-1 max-w-5xl mx-auto w-full px-4 py-6">
+        <Tabs defaultValue="Sabji">
+          <TabsList className="flex flex-wrap gap-1 h-auto bg-accent/50 p-1 mb-6">
+            {CATEGORIES.map((cat) => (
+              <TabsTrigger
+                key={cat.value}
+                value={cat.value}
+                data-ocid="menu.tab"
+                className="font-ui font-medium"
+              >
+                {cat.emoji} {cat.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+
+          {CATEGORIES.map((cat) => (
+            <TabsContent key={cat.value} value={cat.value}>
+              {isLoading ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {["s1", "s2", "s3", "s4", "s5", "s6"].map((k) => (
+                    <Skeleton key={k} className="h-64 rounded-xl" />
+                  ))}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  <AnimatePresence>
+                    {getItemsByCategory(cat.value).map((item, idx) => {
+                      const qty = getCartQuantity(item.id);
+                      return (
+                        <motion.div
+                          key={item.id.toString()}
+                          data-ocid={`menu.item.${idx + 1}`}
+                          initial={{ opacity: 0, y: 16 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: idx * 0.04 }}
+                          className="bg-card rounded-xl border border-border overflow-hidden
+                            hover:shadow-md transition-all duration-200 hover:-translate-y-0.5 group"
+                        >
+                          {/* Image */}
+                          <div className="relative h-44 bg-accent/30 overflow-hidden">
+                            <img
+                              src={
+                                item.imageUrl ||
+                                getCategoryFallback(item.category)
+                              }
+                              alt={item.name}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).src =
+                                  getCategoryFallback(item.category);
+                              }}
+                            />
+                          </div>
+
+                          {/* Content */}
+                          <div className="p-4">
+                            <div className="flex items-start justify-between gap-2 mb-1">
+                              <h3 className="font-display font-semibold text-foreground leading-tight">
+                                {item.name}
+                              </h3>
+                              <span className="font-ui font-bold text-primary whitespace-nowrap">
+                                {formatINR(item.price)}
+                              </span>
+                            </div>
+                            <p className="text-sm text-muted-foreground font-ui line-clamp-2 mb-3">
+                              {item.description}
+                            </p>
+
+                            {/* Add to cart control */}
+                            {qty === 0 ? (
+                              <Button
+                                className="w-full font-ui"
+                                size="sm"
+                                onClick={() =>
+                                  onAddToCart({
+                                    menuItemId: item.id,
+                                    name: item.name,
+                                    price: item.price,
+                                  })
+                                }
+                              >
+                                <Plus className="w-4 h-4 mr-1" />
+                                Add to Cart
+                              </Button>
+                            ) : (
+                              <div className="flex items-center gap-2">
+                                <Button
+                                  variant="outline"
+                                  size="icon"
+                                  className="h-8 w-8"
+                                  onClick={() => onUpdateQuantity(item.id, -1)}
+                                >
+                                  {qty === 1 ? (
+                                    <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                                  ) : (
+                                    <Minus className="w-3.5 h-3.5" />
+                                  )}
+                                </Button>
+                                <span className="flex-1 text-center font-ui font-semibold">
+                                  {qty} in cart
+                                </span>
+                                <Button
+                                  variant="outline"
+                                  size="icon"
+                                  className="h-8 w-8"
+                                  onClick={() => onUpdateQuantity(item.id, 1)}
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                        </motion.div>
+                      );
+                    })}
+                  </AnimatePresence>
+                  {getItemsByCategory(cat.value).length === 0 && (
+                    <div
+                      data-ocid="menu.empty_state"
+                      className="col-span-full flex flex-col items-center justify-center py-16 text-center"
+                    >
+                      <div className="text-5xl mb-3">🍽️</div>
+                      <p className="font-ui text-muted-foreground">
+                        No {cat.label.toLowerCase()} available right now
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </TabsContent>
+          ))}
+        </Tabs>
+      </div>
+    </div>
+  );
+}
+
+
+================================================================================
+FILE: src/frontend/src/components/restaurant/OrderStatusView.tsx
+================================================================================
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { CheckCircle2, ChefHat, Clock, Plus, ReceiptText } from "lucide-react";
+import { motion } from "motion/react";
+import { OrderStatus } from "../../backend";
+import { useGetTableOrders } from "../../hooks/useQueries";
+import type { Order } from "../../hooks/useQueries";
+
+interface OrderStatusViewProps {
+  tableNumber: number;
+  orderId: bigint | null;
+  onViewBill: () => void;
+  onNewOrder: () => void;
+}
+
+function StatusBadge({ status }: { status: OrderStatus }) {
+  const config = {
+    [OrderStatus.pending]: {
+      label: "Pending",
+      className: "bg-yellow-100 text-yellow-800 border-yellow-200",
+    },
+    [OrderStatus.confirmed]: {
+      label: "Preparing",
+      className: "bg-blue-100 text-blue-800 border-blue-200",
+    },
+    [OrderStatus.ready]: {
+      label: "Ready! 🎉",
+      className: "bg-green-100 text-green-800 border-green-200",
+    },
+  };
+  const c = config[status] ?? config[OrderStatus.pending];
+  return (
+    <Badge className={`font-ui font-medium border ${c.className}`}>
+      {c.label}
+    </Badge>
+  );
+}
+
+function StatusIcon({ status }: { status: OrderStatus }) {
+  if (status === OrderStatus.ready) {
+    return (
+      <motion.div
+        animate={{ scale: [1, 1.2, 1] }}
+        transition={{ repeat: Number.POSITIVE_INFINITY, duration: 1.5 }}
+      >
+        <CheckCircle2 className="w-12 h-12 text-green-500" />
+      </motion.div>
+    );
+  }
+  if (status === OrderStatus.confirmed) {
+    return (
+      <motion.div
+        animate={{ rotate: [0, 10, -10, 0] }}
+        transition={{ repeat: Number.POSITIVE_INFINITY, duration: 2 }}
+      >
+        <ChefHat className="w-12 h-12 text-blue-500" />
+      </motion.div>
+    );
+  }
+  return (
+    <motion.div
+      animate={{ opacity: [1, 0.5, 1] }}
+      transition={{ repeat: Number.POSITIVE_INFINITY, duration: 1.5 }}
+    >
+      <Clock className="w-12 h-12 text-yellow-500" />
+    </motion.div>
+  );
+}
+
+function OrderCard({ order, index }: { order: Order; index: number }) {
+  const placedTime = new Date(
+    Number(order.placedAt) / 1_000_000,
+  ).toLocaleTimeString();
+  const estimatedMins = order.estimatedMinutes
+    ? Number(order.estimatedMinutes)
+    : null;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: index * 0.1 }}
+      data-ocid="order.status.panel"
+      className="bg-card border border-border rounded-xl p-5 shadow-xs"
+    >
+      <div className="flex items-start justify-between mb-4">
+        <div>
+          <p className="font-ui text-sm text-muted-foreground">
+            Order #{Number(order.id)}
+          </p>
+          <p className="font-display font-semibold text-foreground text-lg">
+            Placed at {placedTime}
+          </p>
+        </div>
+        <StatusBadge status={order.status} />
+      </div>
+
+      <div className="flex items-center gap-4 mb-4">
+        <StatusIcon status={order.status} />
+        <div>
+          {order.status === OrderStatus.pending && (
+            <p className="font-ui text-muted-foreground text-sm">
+              Your order is waiting to be confirmed by the kitchen.
+            </p>
+          )}
+          {order.status === OrderStatus.confirmed && (
+            <p className="font-ui text-sm text-foreground">
+              {estimatedMins ? (
+                <>
+                  Your order will be ready in approximately{" "}
+                  <strong>{estimatedMins} min</strong>.
+                </>
+              ) : (
+                "Your order is being prepared."
+              )}
+            </p>
+          )}
+          {order.status === OrderStatus.ready && (
+            <p className="font-ui font-semibold text-green-700">
+              Your order is ready! Enjoy your meal! 🎉
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Items list */}
+      <div className="bg-accent/30 rounded-lg p-3">
+        <p className="font-ui text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+          Order Items
+        </p>
+        <div className="space-y-1">
+          {order.items.map((item) => (
+            <div
+              key={item.menuItemId.toString()}
+              className="flex justify-between text-sm font-ui"
+            >
+              <span className="text-foreground">
+                {item.name}{" "}
+                <span className="text-muted-foreground">
+                  ×{Number(item.quantity)}
+                </span>
+              </span>
+              <span className="text-foreground font-medium">
+                ${(item.price * Number(item.quantity)).toFixed(2)}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+export default function OrderStatusView({
+  tableNumber,
+  onViewBill,
+  onNewOrder,
+}: OrderStatusViewProps) {
+  const { data: orders = [], isLoading } = useGetTableOrders(tableNumber);
+
+  const activeOrders = orders.filter(
+    (o) => o.status !== OrderStatus.ready || true,
+  );
+
+  return (
+    <div className="min-h-[calc(100vh-4rem)] max-w-2xl mx-auto px-4 py-8">
+      <motion.div
+        initial={{ opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
+      >
+        <div className="text-center mb-8">
+          <h2 className="font-display text-2xl font-bold text-foreground">
+            Table {tableNumber} — Order Status
+          </h2>
+          <p className="text-muted-foreground font-ui mt-1 text-sm">
+            Updates automatically every 5 seconds
+          </p>
+        </div>
+
+        {isLoading ? (
+          <div data-ocid="order.loading_state" className="space-y-4">
+            <Skeleton className="h-48 rounded-xl" />
+            <Skeleton className="h-48 rounded-xl" />
+          </div>
+        ) : activeOrders.length === 0 ? (
+          <div
+            data-ocid="order.empty_state"
+            className="flex flex-col items-center justify-center py-16 text-center"
+          >
+            <Clock className="w-16 h-16 text-muted-foreground/30 mb-4" />
+            <p className="font-ui text-muted-foreground">No active orders</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {activeOrders.map((order, idx) => (
+              <OrderCard key={order.id.toString()} order={order} index={idx} />
+            ))}
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex gap-3 mt-8">
+          <Button
+            data-ocid="order.bill.button"
+            variant="outline"
+            className="flex-1 font-ui"
+            onClick={onViewBill}
+          >
+            <ReceiptText className="w-4 h-4 mr-2" />
+            View Bill
+          </Button>
+          <Button className="flex-1 font-ui" onClick={onNewOrder}>
+            <Plus className="w-4 h-4 mr-2" />
+            Add More Items
+          </Button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+
+================================================================================
+FILE: src/frontend/src/components/restaurant/BillView.tsx
+================================================================================
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { ArrowLeft, Loader2, ReceiptText } from "lucide-react";
+import { motion } from "motion/react";
+import { toast } from "sonner";
+import type { OrderStatus } from "../../backend";
+import {
+  useGetTableBill,
+  useGetTableOrders,
+  usePayBill,
+} from "../../hooks/useQueries";
+
+interface BillViewProps {
+  tableNumber: number;
+  onBack: () => void;
+  onPaySuccess: () => void;
+}
+
+export default function BillView({
+  tableNumber,
+  onBack,
+  onPaySuccess,
+}: BillViewProps) {
+  const { data: orders = [], isLoading: ordersLoading } =
+    useGetTableOrders(tableNumber);
+  const { data: totalBill = 0, isLoading: billLoading } =
+    useGetTableBill(tableNumber);
+  const { mutateAsync: payBill, isPending: isPaying } = usePayBill();
+
+  const isLoading = ordersLoading || billLoading;
+
+  const formatINR = (amount: number) =>
+    `₹${amount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  const handlePay = async () => {
+    try {
+      await payBill(tableNumber);
+      toast.success("Bill paid! Thank you for dining with us! 🙏");
+      onPaySuccess();
+    } catch {
+      toast.error("Payment failed. Please try again.");
+    }
+  };
+
+  // Collect all items from all orders
+  const allItems: {
+    name: string;
+    quantity: number;
+    price: number;
+    orderStatus: OrderStatus;
+  }[] = [];
+
+  for (const order of orders) {
+    for (const item of order.items) {
+      const existing = allItems.find(
+        (a) =>
+          a.name === item.name &&
+          a.price === item.price &&
+          a.orderStatus === order.status,
+      );
+      if (existing) {
+        existing.quantity += Number(item.quantity);
+      } else {
+        allItems.push({
+          name: item.name,
+          quantity: Number(item.quantity),
+          price: item.price,
+          orderStatus: order.status,
+        });
+      }
+    }
+  }
+
+  return (
+    <div className="min-h-[calc(100vh-4rem)] max-w-lg mx-auto px-4 py-8">
+      <motion.div
+        initial={{ opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
+      >
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onBack}
+          className="mb-6 font-ui text-muted-foreground gap-1"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          Back to Orders
+        </Button>
+
+        <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-xs">
+          {/* Bill header */}
+          <div className="bg-primary px-6 py-5 text-primary-foreground">
+            <div className="flex items-center gap-3">
+              <ReceiptText className="w-6 h-6" />
+              <div>
+                <h2 className="font-display text-xl font-bold">Bill Summary</h2>
+                <p className="text-primary-foreground/80 text-sm font-ui">
+                  Table {tableNumber}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Bill body */}
+          <div className="p-6">
+            {isLoading ? (
+              <div className="space-y-3">
+                <Skeleton className="h-8 w-full" />
+                <Skeleton className="h-8 w-full" />
+                <Skeleton className="h-8 w-full" />
+                <Skeleton className="h-8 w-3/4" />
+              </div>
+            ) : allItems.length === 0 ? (
+              <div data-ocid="bill.empty_state" className="text-center py-8">
+                <p className="text-muted-foreground font-ui">
+                  No items to bill
+                </p>
+              </div>
+            ) : (
+              <>
+                {/* Order items */}
+                <div className="space-y-3 mb-4">
+                  {orders.flatMap((order) =>
+                    order.items.map((item) => (
+                      <div
+                        key={`${order.id.toString()}-${item.menuItemId.toString()}`}
+                        className="flex items-center justify-between text-sm font-ui"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-foreground font-medium">
+                            {item.name}
+                          </span>
+                          <span className="text-muted-foreground">
+                            ×{Number(item.quantity)}
+                          </span>
+                        </div>
+                        <span className="text-foreground font-semibold">
+                          {formatINR(item.price * Number(item.quantity))}
+                        </span>
+                      </div>
+                    )),
+                  )}
+                </div>
+
+                <Separator className="my-4" />
+
+                {/* Total */}
+                <div className="flex items-center justify-between font-ui">
+                  <span className="text-muted-foreground text-sm">
+                    Subtotal
+                  </span>
+                  <span className="font-semibold">{formatINR(totalBill)}</span>
+                </div>
+                <div className="flex items-center justify-between font-ui mt-2">
+                  <span className="text-muted-foreground text-sm">
+                    Service charge
+                  </span>
+                  <span className="font-semibold text-muted-foreground">
+                    Included
+                  </span>
+                </div>
+                <Separator className="my-4" />
+                <div className="flex items-center justify-between">
+                  <span className="font-display font-bold text-lg text-foreground">
+                    Total
+                  </span>
+                  <span className="font-display font-bold text-2xl text-primary">
+                    {formatINR(totalBill)}
+                  </span>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Pay button */}
+          <div className="px-6 pb-6">
+            <Button
+              data-ocid="bill.pay_button"
+              className="w-full font-ui font-semibold"
+              size="lg"
+              disabled={isPaying || isLoading || allItems.length === 0}
+              onClick={handlePay}
+            >
+              {isPaying ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Processing...
+                </>
+              ) : (
+                `Pay ${formatINR(totalBill)} & Clear Table`
+              )}
+            </Button>
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+
+================================================================================
+FILE: src/frontend/src/pages/KitchenDashboard.tsx
+================================================================================
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  CheckCircle2,
+  ChefHat,
+  Clock,
+  Loader2,
+  LogIn,
+  RefreshCw,
+} from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import { useState } from "react";
+import { toast } from "sonner";
+import { OrderStatus } from "../backend";
+import { useInternetIdentity } from "../hooks/useInternetIdentity";
+import {
+  useConfirmOrder,
+  useGetActiveKitchenOrders,
+  useIsCallerAdmin,
+  useMarkOrderReady,
+} from "../hooks/useQueries";
+import type { Order } from "../hooks/useQueries";
+
+function StatusBadge({ status }: { status: OrderStatus }) {
+  if (status === OrderStatus.ready) {
+    return (
+      <Badge className="bg-green-100 text-green-800 border border-green-200 font-ui">
+        <CheckCircle2 className="w-3 h-3 mr-1" />
+        Ready
+      </Badge>
+    );
+  }
+  if (status === OrderStatus.confirmed) {
+    return (
+      <Badge className="bg-blue-100 text-blue-800 border border-blue-200 font-ui">
+        <ChefHat className="w-3 h-3 mr-1" />
+        Preparing
+      </Badge>
+    );
+  }
+  return (
+    <Badge className="bg-yellow-100 text-yellow-800 border border-yellow-200 font-ui">
+      <Clock className="w-3 h-3 mr-1" />
+      Pending
+    </Badge>
+  );
+}
+
+function KitchenOrderCard({
+  order,
+  index,
+  onConfirm,
+  onReady,
+  isConfirming,
+  isMarking,
+}: {
+  order: Order;
+  index: number;
+  onConfirm: (id: bigint, minutes: number) => Promise<void>;
+  onReady: (id: bigint) => Promise<void>;
+  isConfirming: boolean;
+  isMarking: boolean;
+}) {
+  const [estimatedMinutes, setEstimatedMinutes] = useState(15);
+  const placedTime = new Date(
+    Number(order.placedAt) / 1_000_000,
+  ).toLocaleTimeString();
+  const now = Date.now();
+  const placedMs = Number(order.placedAt) / 1_000_000;
+  const elapsedMinutes = Math.floor((now - placedMs) / 60_000);
+
+  const borderColor =
+    order.status === OrderStatus.ready
+      ? "border-green-200"
+      : order.status === OrderStatus.confirmed
+        ? "border-blue-200"
+        : "border-yellow-200";
+
+  return (
+    <motion.div
+      data-ocid={`kitchen.item.${index + 1}`}
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, x: -20 }}
+      transition={{ delay: index * 0.06 }}
+      className={`bg-card border-2 ${borderColor} rounded-xl p-5 shadow-xs`}
+    >
+      {/* Header */}
+      <div className="flex items-start justify-between mb-4">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="font-display font-bold text-2xl text-foreground">
+              Table {Number(order.tableNumber)}
+            </span>
+            <StatusBadge status={order.status} />
+          </div>
+          <div className="flex items-center gap-3 text-sm text-muted-foreground font-ui">
+            <span className="flex items-center gap-1">
+              <Clock className="w-3.5 h-3.5" />
+              Ordered at {placedTime}
+            </span>
+            <span className="text-xs">
+              ({elapsedMinutes === 0 ? "just now" : `${elapsedMinutes}m ago`})
+            </span>
+          </div>
+        </div>
+        <span className="text-xs font-ui text-muted-foreground">
+          #{Number(order.id)}
+        </span>
+      </div>
+
+      {/* Items */}
+      <div className="bg-accent/30 rounded-lg p-3 mb-4">
+        <p className="font-ui text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+          {order.items.length} item{order.items.length !== 1 ? "s" : ""}
+        </p>
+        <div className="space-y-1.5">
+          {order.items.map((item) => (
+            <div
+              key={item.menuItemId.toString()}
+              className="flex justify-between text-sm font-ui"
+            >
+              <span className="font-semibold text-foreground">{item.name}</span>
+              <span className="bg-primary text-primary-foreground rounded-full px-2 py-0.5 text-xs font-bold">
+                ×{Number(item.quantity)}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Actions */}
+      {order.status === OrderStatus.pending && (
+        <div className="flex items-end gap-3">
+          <div className="flex-1">
+            <Label
+              htmlFor={`est-${order.id}`}
+              className="text-xs font-ui text-muted-foreground mb-1 block"
+            >
+              Est. minutes
+            </Label>
+            <Input
+              id={`est-${order.id}`}
+              type="number"
+              min={1}
+              max={120}
+              value={estimatedMinutes}
+              onChange={(e) => setEstimatedMinutes(Number(e.target.value))}
+              className="h-9 font-ui"
+            />
+          </div>
+          <Button
+            data-ocid={`kitchen.confirm_button.${index + 1}`}
+            className="font-ui font-semibold flex-1"
+            disabled={isConfirming}
+            onClick={() => onConfirm(order.id, estimatedMinutes)}
+          >
+            {isConfirming ? (
+              <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+            ) : (
+              <CheckCircle2 className="w-4 h-4 mr-1" />
+            )}
+            Confirm Order
+          </Button>
+        </div>
+      )}
+
+      {order.status === OrderStatus.confirmed && (
+        <Button
+          data-ocid={`kitchen.ready_button.${index + 1}`}
+          className="w-full font-ui font-semibold bg-green-600 hover:bg-green-700 text-white"
+          disabled={isMarking}
+          onClick={() => onReady(order.id)}
+        >
+          {isMarking ? (
+            <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+          ) : (
+            <CheckCircle2 className="w-4 h-4 mr-1" />
+          )}
+          Mark as Ready
+        </Button>
+      )}
+
+      {order.status === OrderStatus.ready && (
+        <div className="flex items-center justify-center gap-2 py-2 text-green-600 font-ui font-semibold">
+          <CheckCircle2 className="w-5 h-5" />
+          Order Ready — Served!
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
+export default function KitchenDashboard() {
+  const { login, isLoggingIn } = useInternetIdentity();
+  const { data: isAdmin, isLoading: adminLoading } = useIsCallerAdmin();
+  const {
+    data: orders = [],
+    isLoading: ordersLoading,
+    refetch,
+    isFetching,
+  } = useGetActiveKitchenOrders();
+  const { mutateAsync: confirmOrder, isPending: isConfirming } =
+    useConfirmOrder();
+  const { mutateAsync: markReady, isPending: isMarking } = useMarkOrderReady();
+
+  const handleConfirm = async (id: bigint, minutes: number) => {
+    try {
+      await confirmOrder({ id, estimatedMinutes: minutes });
+      toast.success(`Order confirmed! Ready in ${minutes} min.`);
+    } catch {
+      toast.error("Failed to confirm order.");
+    }
+  };
+
+  const handleMarkReady = async (id: bigint) => {
+    try {
+      await markReady(id);
+      toast.success("Order marked as ready!");
+    } catch {
+      toast.error("Failed to update order.");
+    }
+  };
+
+  // Sort by oldest first
+  const sortedOrders = [...orders].sort(
+    (a, b) => Number(a.placedAt) - Number(b.placedAt),
+  );
+
+  const pendingCount = orders.filter(
+    (o) => o.status === OrderStatus.pending,
+  ).length;
+  const preparingCount = orders.filter(
+    (o) => o.status === OrderStatus.confirmed,
+  ).length;
+
+  if (adminLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[calc(100vh-4rem)]">
+        <div
+          data-ocid="kitchen.loading_state"
+          className="space-y-4 w-full max-w-md px-4"
+        >
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-48 w-full" />
+          <Skeleton className="h-48 w-full" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <div className="flex items-center justify-center min-h-[calc(100vh-4rem)] px-4">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="bg-card border border-border rounded-2xl p-8 max-w-sm w-full text-center shadow-xs"
+        >
+          <ChefHat className="w-14 h-14 text-primary mx-auto mb-4" />
+          <h2 className="font-display text-2xl font-bold text-foreground mb-2">
+            Kitchen Access
+          </h2>
+          <p className="text-muted-foreground font-ui text-sm mb-6">
+            This area is for kitchen staff only. Please sign in with your admin
+            credentials to continue.
+          </p>
+          <Button
+            data-ocid="auth.login_button"
+            className="w-full font-ui font-semibold"
+            size="lg"
+            onClick={login}
+            disabled={isLoggingIn}
+          >
+            {isLoggingIn ? (
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            ) : (
+              <LogIn className="w-4 h-4 mr-2" />
+            )}
+            {isLoggingIn ? "Signing In..." : "Sign In to Access Kitchen"}
+          </Button>
+        </motion.div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-[calc(100vh-4rem)] max-w-5xl mx-auto px-4 py-6">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="font-display text-3xl font-bold text-foreground flex items-center gap-2">
+            <ChefHat className="w-8 h-8 text-primary" />
+            Kitchen Dashboard
+          </h1>
+          <p className="text-muted-foreground font-ui text-sm mt-1">
+            Live order feed — auto-refreshes every 5 seconds
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => refetch()}
+          disabled={isFetching}
+          className="font-ui gap-2"
+        >
+          <RefreshCw
+            className={`w-4 h-4 ${isFetching ? "animate-spin" : ""}`}
+          />
+          Refresh
+        </Button>
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-3 gap-4 mb-6">
+        <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 text-center">
+          <p className="font-display text-3xl font-bold text-yellow-700">
+            {pendingCount}
+          </p>
+          <p className="text-yellow-600 font-ui text-sm mt-1">Pending</p>
+        </div>
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-center">
+          <p className="font-display text-3xl font-bold text-blue-700">
+            {preparingCount}
+          </p>
+          <p className="text-blue-600 font-ui text-sm mt-1">Preparing</p>
+        </div>
+        <div className="bg-card border border-border rounded-xl p-4 text-center">
+          <p className="font-display text-3xl font-bold text-foreground">
+            {orders.length}
+          </p>
+          <p className="text-muted-foreground font-ui text-sm mt-1">
+            Total Active
+          </p>
+        </div>
+      </div>
+
+      {/* Orders grid */}
+      {ordersLoading ? (
+        <div
+          data-ocid="kitchen.loading_state"
+          className="grid grid-cols-1 md:grid-cols-2 gap-4"
+        >
+          {["k1", "k2", "k3", "k4"].map((k) => (
+            <Skeleton key={k} className="h-64 rounded-xl" />
+          ))}
+        </div>
+      ) : sortedOrders.length === 0 ? (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          data-ocid="kitchen.empty_state"
+          className="flex flex-col items-center justify-center py-20 text-center"
+        >
+          <ChefHat className="w-20 h-20 text-muted-foreground/20 mb-4" />
+          <h3 className="font-display text-xl font-semibold text-muted-foreground mb-2">
+            All caught up!
+          </h3>
+          <p className="text-sm text-muted-foreground font-ui">
+            No active orders right now. New orders will appear here
+            automatically.
+          </p>
+        </motion.div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <AnimatePresence>
+            {sortedOrders.map((order, idx) => (
+              <KitchenOrderCard
+                key={order.id.toString()}
+                order={order}
+                index={idx}
+                onConfirm={handleConfirm}
+                onReady={handleMarkReady}
+                isConfirming={isConfirming}
+                isMarking={isMarking}
+              />
+            ))}
+          </AnimatePresence>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+================================================================================
+FILE: src/frontend/src/pages/AdminPanel.tsx
+================================================================================
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Check,
+  Loader2,
+  LogIn,
+  Pencil,
+  Plus,
+  Settings,
+  Trash2,
+} from "lucide-react";
+import { motion } from "motion/react";
+import { useState } from "react";
+import { toast } from "sonner";
+import { useInternetIdentity } from "../hooks/useInternetIdentity";
+import {
+  useCreateMenuItem,
+  useDeleteMenuItem,
+  useGetMenu,
+  useIsCallerAdmin,
+  useToggleMenuItemAvailability,
+  useUpdateMenuItem,
+} from "../hooks/useQueries";
+import type { MenuItem } from "../hooks/useQueries";
+
+const CATEGORIES = ["Sabji", "Roti", "Rice", "Sides", "Drinks"];
+
+const CATEGORY_FALLBACK_IMAGES: Record<string, string> = {
+  Sabji: "/assets/generated/food-sabji.dim_600x400.jpg",
+  Roti: "/assets/generated/food-roti.dim_600x400.jpg",
+  Rice: "/assets/generated/food-rice.dim_600x400.jpg",
+  Sides: "/assets/generated/food-sides.dim_600x400.jpg",
+  Drinks: "/assets/generated/food-drinks.dim_600x400.jpg",
+};
+
+const formatINR = (amount: number) =>
+  `₹${amount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+interface MenuItemFormData {
+  name: string;
+  description: string;
+  price: string;
+  category: string;
+  imageUrl: string;
+}
+
+const defaultForm: MenuItemFormData = {
+  name: "",
+  description: "",
+  price: "",
+  category: "Sabji",
+  imageUrl: "",
+};
+
+const DEFAULT_MENU_ITEMS = [
+  // Sabji
+  {
+    name: "Paneer Butter Masala",
+    description:
+      "Soft paneer cubes in rich, creamy tomato-butter gravy with aromatic spices",
+    price: 220,
+    category: "Sabji",
+    imageUrl: "",
+  },
+  {
+    name: "Kadai Paneer",
+    description:
+      "Paneer and bell peppers cooked in a spiced onion-tomato masala in a kadai",
+    price: 210,
+    category: "Sabji",
+    imageUrl: "",
+  },
+  {
+    name: "Mix Veg",
+    description: "Seasonal vegetables cooked in a mildly spiced gravy",
+    price: 160,
+    category: "Sabji",
+    imageUrl: "",
+  },
+  {
+    name: "Aloo Gobi",
+    description:
+      "Potato and cauliflower stir-fried with cumin and Indian spices",
+    price: 140,
+    category: "Sabji",
+    imageUrl: "",
+  },
+  {
+    name: "Bhindi Masala",
+    description: "Crispy okra sauteed with onions, tomatoes, and spices",
+    price: 150,
+    category: "Sabji",
+    imageUrl: "",
+  },
+  {
+    name: "Chana Masala",
+    description: "Hearty chickpeas in a tangy and spiced tomato-onion gravy",
+    price: 160,
+    category: "Sabji",
+    imageUrl: "",
+  },
+  {
+    name: "Dal Tadka",
+    description:
+      "Yellow lentils tempered with ghee, cumin, garlic, and dried chillies",
+    price: 130,
+    category: "Sabji",
+    imageUrl: "",
+  },
+  {
+    name: "Dal Fry",
+    description:
+      "Slow-cooked lentils fried with onions, tomatoes, and aromatic spices",
+    price: 130,
+    category: "Sabji",
+    imageUrl: "",
+  },
+  // Roti
+  {
+    name: "Tandoori Roti",
+    description: "Whole wheat bread baked fresh in a clay tandoor oven",
+    price: 30,
+    category: "Roti",
+    imageUrl: "",
+  },
+  {
+    name: "Butter Roti",
+    description:
+      "Soft whole wheat roti finished with a generous dollop of butter",
+    price: 40,
+    category: "Roti",
+    imageUrl: "",
+  },
+  {
+    name: "Plain Naan",
+    description: "Soft leavened bread baked in a tandoor oven",
+    price: 40,
+    category: "Roti",
+    imageUrl: "",
+  },
+  {
+    name: "Butter Naan",
+    description: "Fluffy tandoor bread brushed with melted butter",
+    price: 50,
+    category: "Roti",
+    imageUrl: "",
+  },
+  {
+    name: "Garlic Naan",
+    description: "Naan topped with fresh garlic and butter, baked in a tandoor",
+    price: 60,
+    category: "Roti",
+    imageUrl: "",
+  },
+  {
+    name: "Lachha Paratha",
+    description:
+      "Flaky multi-layered whole wheat paratha, crisp on the outside",
+    price: 60,
+    category: "Roti",
+    imageUrl: "",
+  },
+  // Rice
+  {
+    name: "Jeera Rice",
+    description: "Fragrant basmati rice tempered with cumin seeds and ghee",
+    price: 120,
+    category: "Rice",
+    imageUrl: "",
+  },
+  {
+    name: "Plain Rice",
+    description: "Steamed long-grain basmati rice",
+    price: 90,
+    category: "Rice",
+    imageUrl: "",
+  },
+  {
+    name: "Veg Biryani",
+    description:
+      "Aromatic basmati rice layered with spiced vegetables and saffron",
+    price: 200,
+    category: "Rice",
+    imageUrl: "",
+  },
+  {
+    name: "Paneer Biryani",
+    description:
+      "Fragrant biryani with marinated paneer, saffron, and caramelised onions",
+    price: 240,
+    category: "Rice",
+    imageUrl: "",
+  },
+  {
+    name: "Pulao",
+    description:
+      "Lightly spiced basmati rice cooked with whole spices and vegetables",
+    price: 160,
+    category: "Rice",
+    imageUrl: "",
+  },
+  // Sides
+  {
+    name: "Green Salad",
+    description: "Fresh cucumber, tomato, onion, and lemon wedge",
+    price: 60,
+    category: "Sides",
+    imageUrl: "",
+  },
+  {
+    name: "Boondi Raita",
+    description: "Chilled yogurt with crispy boondi, cumin, and chaat masala",
+    price: 70,
+    category: "Sides",
+    imageUrl: "",
+  },
+  {
+    name: "Plain Curd",
+    description: "Fresh homestyle yogurt, smooth and creamy",
+    price: 50,
+    category: "Sides",
+    imageUrl: "",
+  },
+  {
+    name: "Papad",
+    description: "Crispy roasted lentil wafer served with mint chutney",
+    price: 30,
+    category: "Sides",
+    imageUrl: "",
+  },
+  // Drinks
+  {
+    name: "Masala Chaas",
+    description: "Spiced buttermilk with cumin, ginger, and fresh coriander",
+    price: 60,
+    category: "Drinks",
+    imageUrl: "",
+  },
+  {
+    name: "Lassi",
+    description: "Thick and creamy chilled yogurt drink, sweet or salted",
+    price: 80,
+    category: "Drinks",
+    imageUrl: "",
+  },
+  {
+    name: "Lemon Soda",
+    description: "Fresh lemon juice with soda water, served chilled",
+    price: 60,
+    category: "Drinks",
+    imageUrl: "",
+  },
+  {
+    name: "Mineral Water",
+    description: "500ml chilled mineral water bottle",
+    price: 30,
+    category: "Drinks",
+    imageUrl: "",
+  },
+];
+
+function MenuItemForm({
+  initialData,
+  onSubmit,
+  isLoading,
+  submitLabel,
+}: {
+  initialData?: MenuItemFormData;
+  onSubmit: (data: MenuItemFormData) => Promise<void>;
+  isLoading: boolean;
+  submitLabel: string;
+}) {
+  const [form, setForm] = useState<MenuItemFormData>(
+    initialData ?? defaultForm,
+  );
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.name || !form.price || !form.category) {
+      toast.error("Please fill in all required fields.");
+      return;
+    }
+    await onSubmit(form);
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="grid grid-cols-2 gap-4">
+        <div className="col-span-2">
+          <Label htmlFor="name" className="font-ui text-sm mb-1 block">
+            Name *
+          </Label>
+          <Input
+            id="name"
+            data-ocid="admin.input"
+            value={form.name}
+            onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+            placeholder="e.g. Grilled Salmon"
+            className="font-ui"
+            required
+          />
+        </div>
+
+        <div>
+          <Label htmlFor="price" className="font-ui text-sm mb-1 block">
+            Price (₹) *
+          </Label>
+          <Input
+            id="price"
+            type="number"
+            step="1"
+            min="0"
+            value={form.price}
+            onChange={(e) => setForm((p) => ({ ...p, price: e.target.value }))}
+            placeholder="e.g. 299"
+            className="font-ui"
+            required
+          />
+        </div>
+
+        <div>
+          <Label htmlFor="category" className="font-ui text-sm mb-1 block">
+            Category *
+          </Label>
+          <Select
+            value={form.category}
+            onValueChange={(v) => setForm((p) => ({ ...p, category: v }))}
+          >
+            <SelectTrigger className="font-ui" data-ocid="admin.select">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {CATEGORIES.map((cat) => (
+                <SelectItem key={cat} value={cat} className="font-ui">
+                  {cat}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="col-span-2">
+          <Label htmlFor="description" className="font-ui text-sm mb-1 block">
+            Description
+          </Label>
+          <Textarea
+            id="description"
+            value={form.description}
+            onChange={(e) =>
+              setForm((p) => ({ ...p, description: e.target.value }))
+            }
+            placeholder="Describe the dish..."
+            className="font-ui resize-none"
+            rows={3}
+          />
+        </div>
+
+        <div className="col-span-2">
+          <Label htmlFor="imageUrl" className="font-ui text-sm mb-1 block">
+            Image URL
+          </Label>
+          <Input
+            id="imageUrl"
+            value={form.imageUrl}
+            onChange={(e) =>
+              setForm((p) => ({ ...p, imageUrl: e.target.value }))
+            }
+            placeholder="https://example.com/food-image.jpg"
+            className="font-ui"
+          />
+          {/* Image preview */}
+          <div className="mt-2 rounded-lg overflow-hidden border border-border h-32 bg-accent/20 flex items-center justify-center">
+            <img
+              src={
+                form.imageUrl ||
+                CATEGORY_FALLBACK_IMAGES[form.category] ||
+                CATEGORY_FALLBACK_IMAGES.Sabji
+              }
+              alt="Preview"
+              className="h-full w-full object-cover"
+              onError={(e) => {
+                (e.target as HTMLImageElement).src =
+                  CATEGORY_FALLBACK_IMAGES[form.category] ??
+                  CATEGORY_FALLBACK_IMAGES.Sabji;
+              }}
+            />
+          </div>
+          <p className="text-xs text-muted-foreground font-ui mt-1">
+            Paste a URL above to preview. Leave blank to use the category
+            default image.
+          </p>
+        </div>
+      </div>
+
+      <DialogFooter>
+        <Button
+          type="submit"
+          disabled={isLoading}
+          data-ocid="admin.save_button"
+          className="font-ui font-semibold"
+        >
+          {isLoading ? (
+            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+          ) : (
+            <Check className="w-4 h-4 mr-2" />
+          )}
+          {isLoading ? "Saving..." : submitLabel}
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}
+
+function MenuItemRow({
+  item,
+  index,
+}: {
+  item: MenuItem;
+  index: number;
+}) {
+  const [editOpen, setEditOpen] = useState(false);
+  const { mutateAsync: updateItem, isPending: isUpdating } =
+    useUpdateMenuItem();
+  const { mutateAsync: deleteItem, isPending: isDeleting } =
+    useDeleteMenuItem();
+  const { mutateAsync: toggleAvailability, isPending: isToggling } =
+    useToggleMenuItemAvailability();
+
+  const handleEdit = async (data: MenuItemFormData) => {
+    try {
+      await updateItem({
+        id: item.id,
+        name: data.name,
+        description: data.description,
+        price: Number.parseFloat(data.price),
+        category: data.category,
+        imageUrl: data.imageUrl,
+      });
+      toast.success("Menu item updated!");
+      setEditOpen(false);
+    } catch {
+      toast.error("Failed to update item.");
+    }
+  };
+
+  const handleDelete = async () => {
+    try {
+      await deleteItem(item.id);
+      toast.success("Menu item deleted.");
+    } catch {
+      toast.error("Failed to delete item.");
+    }
+  };
+
+  const handleToggle = async () => {
+    try {
+      await toggleAvailability(item.id);
+    } catch {
+      toast.error("Failed to update availability.");
+    }
+  };
+
+  return (
+    <TableRow data-ocid={`admin.item.${index + 1}`}>
+      <TableCell>
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 rounded-lg overflow-hidden bg-accent/30 flex-shrink-0 border border-border">
+            <img
+              src={
+                item.imageUrl ||
+                CATEGORY_FALLBACK_IMAGES[item.category] ||
+                CATEGORY_FALLBACK_IMAGES.Sabji
+              }
+              alt={item.name}
+              className="w-full h-full object-cover"
+              onError={(e) => {
+                (e.target as HTMLImageElement).src =
+                  CATEGORY_FALLBACK_IMAGES[item.category] ??
+                  CATEGORY_FALLBACK_IMAGES.Sabji;
+              }}
+            />
+          </div>
+          <div>
+            <p className="font-ui font-semibold text-foreground text-sm">
+              {item.name}
+            </p>
+            <p className="text-xs text-muted-foreground font-ui line-clamp-1">
+              {item.description}
+            </p>
+          </div>
+        </div>
+      </TableCell>
+      <TableCell>
+        <Badge variant="outline" className="font-ui text-xs">
+          {item.category}
+        </Badge>
+      </TableCell>
+      <TableCell className="font-ui font-semibold text-primary">
+        {formatINR(item.price)}
+      </TableCell>
+      <TableCell>
+        <Switch
+          data-ocid={`admin.toggle.${index + 1}`}
+          checked={item.available}
+          onCheckedChange={handleToggle}
+          disabled={isToggling}
+        />
+      </TableCell>
+      <TableCell>
+        <div className="flex items-center gap-2">
+          {/* Edit dialog */}
+          <Dialog open={editOpen} onOpenChange={setEditOpen}>
+            <DialogTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                data-ocid={`admin.edit_button.${index + 1}`}
+              >
+                <Pencil className="w-4 h-4" />
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle className="font-display text-xl">
+                  Edit Menu Item
+                </DialogTitle>
+              </DialogHeader>
+              <MenuItemForm
+                initialData={{
+                  name: item.name,
+                  description: item.description,
+                  price: item.price.toString(),
+                  category: item.category,
+                  imageUrl: item.imageUrl,
+                }}
+                onSubmit={handleEdit}
+                isLoading={isUpdating}
+                submitLabel="Save Changes"
+              />
+            </DialogContent>
+          </Dialog>
+
+          {/* Delete alert */}
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-destructive hover:text-destructive"
+                data-ocid={`admin.delete_button.${index + 1}`}
+                disabled={isDeleting}
+              >
+                {isDeleting ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Trash2 className="w-4 h-4" />
+                )}
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent data-ocid="admin.dialog">
+              <AlertDialogHeader>
+                <AlertDialogTitle className="font-display">
+                  Delete Menu Item?
+                </AlertDialogTitle>
+                <AlertDialogDescription className="font-ui">
+                  This will permanently remove "{item.name}" from the menu. This
+                  action cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel
+                  className="font-ui"
+                  data-ocid="admin.cancel_button"
+                >
+                  Cancel
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  className="font-ui bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  data-ocid="admin.confirm_button"
+                  onClick={handleDelete}
+                >
+                  Delete
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+export default function AdminPanel() {
+  const { login, isLoggingIn } = useInternetIdentity();
+  const { data: isAdmin, isLoading: adminLoading } = useIsCallerAdmin();
+  const { data: menuItems = [], isLoading: menuLoading } = useGetMenu();
+  const { mutateAsync: createItem, isPending: isCreating } =
+    useCreateMenuItem();
+  const [addOpen, setAddOpen] = useState(false);
+  const [isSeeding, setIsSeeding] = useState(false);
+  const [seedProgress, setSeedProgress] = useState(0);
+
+  const handleCreate = async (data: MenuItemFormData) => {
+    try {
+      await createItem({
+        name: data.name,
+        description: data.description,
+        price: Number.parseFloat(data.price),
+        category: data.category,
+        imageUrl: data.imageUrl,
+      });
+      toast.success("Menu item created!");
+      setAddOpen(false);
+    } catch {
+      toast.error("Failed to create item.");
+    }
+  };
+
+  const handleLoadDefaultMenu = async () => {
+    setIsSeeding(true);
+    setSeedProgress(0);
+    try {
+      for (let i = 0; i < DEFAULT_MENU_ITEMS.length; i++) {
+        const item = DEFAULT_MENU_ITEMS[i];
+        await createItem(item);
+        setSeedProgress(i + 1);
+      }
+      toast.success("Default menu loaded successfully!");
+    } catch {
+      toast.error("Failed to load some menu items. Please try again.");
+    } finally {
+      setIsSeeding(false);
+      setSeedProgress(0);
+    }
+  };
+
+  if (adminLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[calc(100vh-4rem)]">
+        <div
+          data-ocid="admin.loading_state"
+          className="space-y-4 w-full max-w-2xl px-4"
+        >
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-64 w-full" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <div className="flex items-center justify-center min-h-[calc(100vh-4rem)] px-4">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="bg-card border border-border rounded-2xl p-8 max-w-sm w-full text-center shadow-xs"
+        >
+          <Settings className="w-14 h-14 text-primary mx-auto mb-4" />
+          <h2 className="font-display text-2xl font-bold text-foreground mb-2">
+            Admin Access
+          </h2>
+          <p className="text-muted-foreground font-ui text-sm mb-6">
+            This area is for restaurant administrators only. Please sign in to
+            manage your menu and settings.
+          </p>
+          <Button
+            data-ocid="auth.login_button"
+            className="w-full font-ui font-semibold"
+            size="lg"
+            onClick={login}
+            disabled={isLoggingIn}
+          >
+            {isLoggingIn ? (
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            ) : (
+              <LogIn className="w-4 h-4 mr-2" />
+            )}
+            {isLoggingIn ? "Signing In..." : "Sign In as Admin"}
+          </Button>
+        </motion.div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-[calc(100vh-4rem)] max-w-6xl mx-auto px-4 py-6">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="font-display text-3xl font-bold text-foreground flex items-center gap-2">
+            <Settings className="w-7 h-7 text-primary" />
+            Admin Panel
+          </h1>
+          <p className="text-muted-foreground font-ui text-sm mt-1">
+            Manage your restaurant's menu
+          </p>
+        </div>
+
+        {/* Add Item dialog */}
+        <Dialog open={addOpen} onOpenChange={setAddOpen}>
+          <DialogTrigger asChild>
+            <Button
+              data-ocid="admin.add_button"
+              className="font-ui font-semibold gap-2"
+            >
+              <Plus className="w-4 h-4" />
+              Add Item
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-md" data-ocid="admin.dialog">
+            <DialogHeader>
+              <DialogTitle className="font-display text-xl">
+                Add Menu Item
+              </DialogTitle>
+            </DialogHeader>
+            <MenuItemForm
+              onSubmit={handleCreate}
+              isLoading={isCreating}
+              submitLabel="Add to Menu"
+            />
+          </DialogContent>
+        </Dialog>
+      </div>
+
+      {/* Menu items table */}
+      <div className="bg-card border border-border rounded-xl overflow-hidden shadow-xs">
+        <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+          <h2 className="font-display font-semibold text-lg text-foreground">
+            Menu Items
+          </h2>
+          <Badge variant="outline" className="font-ui">
+            {menuItems.length} items
+          </Badge>
+        </div>
+
+        {menuLoading ? (
+          <div className="p-6 space-y-3">
+            {["a1", "a2", "a3", "a4", "a5"].map((k) => (
+              <Skeleton key={k} className="h-14 w-full" />
+            ))}
+          </div>
+        ) : menuItems.length === 0 ? (
+          <div
+            data-ocid="admin.empty_state"
+            className="flex flex-col items-center justify-center py-16 text-center px-6"
+          >
+            <div className="text-5xl mb-4">🍽️</div>
+            <p className="font-ui text-foreground font-semibold text-lg mb-1">
+              Your menu is empty
+            </p>
+            <p className="text-sm text-muted-foreground font-ui mb-6 max-w-xs">
+              Load the default Indian menu with 27 dishes across all categories,
+              or add items individually using "Add Item".
+            </p>
+            {isSeeding ? (
+              <div
+                data-ocid="admin.loading_state"
+                className="flex flex-col items-center gap-3"
+              >
+                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                <p className="font-ui text-sm font-medium text-foreground">
+                  Loading {seedProgress}/{DEFAULT_MENU_ITEMS.length}...
+                </p>
+                <div className="w-48 h-2 bg-accent rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-primary rounded-full transition-all duration-300"
+                    style={{
+                      width: `${(seedProgress / DEFAULT_MENU_ITEMS.length) * 100}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <Button
+                data-ocid="admin.primary_button"
+                size="lg"
+                className="font-ui font-semibold gap-2"
+                onClick={handleLoadDefaultMenu}
+              >
+                <Plus className="w-4 h-4" />
+                Load Default Menu
+              </Button>
+            )}
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="font-ui font-semibold">Item</TableHead>
+                <TableHead className="font-ui font-semibold">
+                  Category
+                </TableHead>
+                <TableHead className="font-ui font-semibold">Price</TableHead>
+                <TableHead className="font-ui font-semibold">
+                  Available
+                </TableHead>
+                <TableHead className="font-ui font-semibold">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {menuItems.map((item, idx) => (
+                <MenuItemRow key={item.id.toString()} item={item} index={idx} />
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </div>
+    </div>
+  );
+}
+
