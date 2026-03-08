@@ -1,0 +1,106 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Fraunces - Display font for restaurant feel */
+@font-face {
+  font-family: "Fraunces";
+  src: url("/assets/fonts/Fraunces.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Bricolage Grotesque - UI labels and nav */
+@font-face {
+  font-family: "Bricolage Grotesque";
+  src: url("/assets/fonts/BricolageGrotesque.woff2") format("woff2");
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* General Sans - Body text */
+@font-face {
+  font-family: "General Sans";
+  src: url("/assets/fonts/GeneralSans.woff2") format("woff2");
+  font-weight: 200 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@layer base {
+  :root {
+    --radius: 0.625rem;
+
+    /* Saffron & Ivory -- vibrant Indian-inspired palette */
+    --background: 0.98 0.01 88;
+    --foreground: 0.18 0.06 42;
+
+    --card: 1 0 0;
+    --card-foreground: 0.18 0.06 42;
+
+    --popover: 1 0 0;
+    --popover-foreground: 0.18 0.06 42;
+
+    /* Saffron primary -- rich golden orange */
+    --primary: 0.68 0.19 58;
+    --primary-foreground: 0.15 0.04 40;
+
+    /* Ivory secondary */
+    --secondary: 0.95 0.018 88;
+    --secondary-foreground: 0.28 0.06 42;
+
+    --muted: 0.93 0.014 85;
+    --muted-foreground: 0.5 0.04 50;
+
+    /* Turmeric accent -- warm deep gold */
+    --accent: 0.82 0.12 72;
+    --accent-foreground: 0.15 0.05 40;
+
+    /* Crimson destructive */
+    --destructive: 0.52 0.22 22;
+    --destructive-foreground: 0.99 0 0;
+
+    --border: 0.88 0.025 80;
+    --input: 0.92 0.018 85;
+    --ring: 0.68 0.19 58;
+
+    /* Status colors */
+    --status-pending: 0.83 0.16 80;
+    --status-pending-fg: 0.2 0.08 50;
+    --status-confirmed: 0.68 0.13 230;
+    --status-confirmed-fg: 0.99 0 0;
+    --status-ready: 0.62 0.15 148;
+    --status-ready-fg: 0.99 0 0;
+
+    /* Chart colors */
+    --chart-1: 0.68 0.19 58;
+    --chart-2: 0.75 0.16 72;
+    --chart-3: 0.62 0.15 148;
+    --chart-4: 0.52 0.22 22;
+    --chart-5: 0.58 0.18 290;
+
+    --sidebar: 0.95 0.016 85;
+    --sidebar-foreground: 0.18 0.06 42;
+    --sidebar-primary: 0.68 0.19 58;
+    --sidebar-primary-foreground: 0.15 0.04 40;
+    --sidebar-accent: 0.9 0.04 78;
+    --sidebar-accent-foreground: 0.2 0.06 42;
+    --sidebar-border: 0.86 0.025 80;
+    --sidebar-ring: 0.68 0.19 58;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: "General Sans", system-ui, sans-serif;
+  }
+
+  h1, h2, h3 {
+    font-family: "Fraunces", Georgia, serif;
+  }
+}
